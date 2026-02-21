@@ -1,17 +1,31 @@
-FROM node:20-alpine
+FROM node:18-alpine
+
+# Install Playwright dependencies for scraping
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont
+
+# Set Playwright to use system Chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 WORKDIR /app
 
+# Copy package files
 COPY package*.json ./
-RUN npm install
 
-COPY prisma ./prisma/
-RUN npx prisma generate
+# Install dependencies
+RUN npm ci --only=production
 
+# Copy all files
 COPY . .
 
-RUN npx prisma generate
+# Expose port
+EXPOSE $PORT
 
-EXPOSE 3001
-
-CMD ["npm", "start"]
+# Start server from root (has all routes consolidated)
+CMD ["node", "server.js"]
