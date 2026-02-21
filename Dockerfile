@@ -8,6 +8,8 @@ RUN npx playwright install chromium
 
 COPY . .
 
-EXPOSE 3001
+EXPOSE $PORT
+
+ENV PORT=8080
 
 CMD ["node", "server.js"]
