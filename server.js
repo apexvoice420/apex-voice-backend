@@ -29,7 +29,7 @@ app.get('/', (req, res) => {
     res.json({ 
         status: 'ok', 
         message: 'Apex Voice Solutions API 🚀',
-        version: '2.1.0',
+        version: '2.3.1',
         endpoints: {
             auth: ['/api/auth/login', '/api/auth/register'],
             leads: ['/leads', '/leads/:id'],
@@ -50,9 +50,11 @@ app.get('/health', (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
+    console.log('Login attempt:', email);
 
     try {
         const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        console.log('Query result:', result.rows.length, 'users found');
         const user = result.rows[0];
 
         if (!user) {
