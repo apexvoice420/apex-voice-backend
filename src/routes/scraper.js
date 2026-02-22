@@ -1,86 +1,198 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../db');
-const { chromium } = require('playwright-core');
+const { scrapeGoogleMaps, enrichLeadsWithEmails } = require('../scraper');
 
-// ANTIGRAVITY-POWERED SCRAPER
+/**
+ * POST /api/scraper/scrape
+ * Scrape Google Maps for leads, optionally enrich with website emails
+ * 
+ * Body: {
+ *   city: string,
+ *   state: string, 
+ *   type: string (business type: roofing, plumber, hvac, etc.),
+ *   minRating: number (default 4.0),
+ *   maxResults: number (default 50),
+ *   enrichEmails: boolean (default true) - visit websites to find emails
+ *   saveToDb: boolean (default true) - save leads to database
+ * }
+ */
 router.post('/scrape', async (req, res) => {
-    const { city, state, type, minRating = 4.0, maxResults = 100 } = req.body;
+    const { 
+        city, 
+        state, 
+        type, 
+        minRating = 4.0, 
+        maxResults = 50,
+        enrichEmails = true,
+        saveToDb = true
+    } = req.body;
 
-    console.log(`🔍 Starting Antigravity scrape: ${type} in ${city}, ${state}`);
-
-    let browser;
-    try {
-        browser = await chromium.launch({
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
-            headless: true
+    if (!city || !state || !type) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Missing required fields: city, state, type' 
         });
+    }
 
-        const page = await browser.newPage();
-        const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(type)}+in+${encodeURIComponent(city)}+${state}`;
+    console.log(`🔍 Starting scrape: ${type} in ${city}, ${state}`);
 
-        await page.goto(searchUrl, { waitUntil: 'networkidle', timeout: 30000 });
-        await page.waitForSelector('[role="article"]', { timeout: 10000 });
+    try {
+        // Step 1: Scrape Google Maps
+        const leads = await scrapeGoogleMaps(city, state, type, maxResults);
+        
+        // Filter by minimum rating
+        const filteredLeads = leads.filter(l => l.rating >= minRating);
+        console.log(`Found ${leads.length} leads, ${filteredLeads} with rating >= ${minRating}`);
 
-        // Scroll
-        const scrollPanel = await page.$('[role="feed"]');
-        if (scrollPanel) {
-            for (let i = 0; i < 5; i++) {
-                await scrollPanel.evaluate(el => el.scrollBy(0, 1000));
-                await page.waitForTimeout(1000);
+        // Step 2: Enrich with website emails
+        let enrichedLeads = filteredLeads;
+        if (enrichEmails && filteredLeads.length > 0) {
+            console.log('📧 Enriching leads with website emails...');
+            enrichedLeads = await enrichLeadsWithEmails(filteredLeads, maxResults);
+        }
+
+        // Step 3: Save to database
+        const savedLeads = [];
+        if (saveToDb) {
+            for (const lead of enrichedLeads) {
+                try {
+                    const formattedPhone = lead.phone.replace(/\D/g, '').slice(-10);
+                    
+                    const result = await pool.query(
+                        `INSERT INTO leads (business_name, phone, email, city, state, niche, rating, reviews, address, website, source)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                         ON CONFLICT (phone) DO UPDATE SET
+                           email = COALESCE(EXCLUDED.email, leads.email),
+                           rating = EXCLUDED.rating,
+                           reviews = EXCLUDED.reviews,
+                           website = COALESCE(EXCLUDED.website, leads.website),
+                           updated_at = NOW()
+                         RETURNING *`,
+                        [
+                            lead.businessName,
+                            formattedPhone,
+                            lead.email,
+                            lead.city,
+                            lead.state,
+                            lead.industry || type,
+                            lead.rating,
+                            lead.reviews,
+                            lead.address,
+                            lead.website,
+                            lead.source
+                        ]
+                    );
+                    
+                    if (result.rows[0]) {
+                        savedLeads.push(result.rows[0]);
+                    }
+                } catch (dbErr) {
+                    console.error(`Error saving lead ${lead.businessName}:`, dbErr.message);
+                }
             }
         }
 
-        const results = [];
-        const listings = await page.$$('[role="article"]');
-        const actualMax = Math.min(listings.length, maxResults);
+        // Stats
+        const stats = {
+            total: leads.length,
+            filtered: filteredLeads.length,
+            withEmails: enrichedLeads.filter(l => l.email).length,
+            saved: savedLeads.length
+        };
 
-        for (let i = 0; i < actualMax; i++) {
-            try {
-                const listing = listings[i];
-                const name = await listing.evaluate(el => el.getAttribute('aria-label') || el.innerText.split('\n')[0]);
-
-                if (!name) continue;
-
-                // Extract rating
-                const ratingText = await listing.evaluate(el => {
-                    const r = el.querySelector('.fontBodyMedium span[role="img"]');
-                    return r ? r.getAttribute('aria-label') : '0 stars';
-                });
-                const rating = parseFloat(ratingText);
-
-                if (rating >= minRating) {
-                    await listing.click();
-                    await page.waitForTimeout(1000);
-
-                    const phone = await page.evaluate(() => {
-                        const el = document.querySelector('[data-item-id*="phone"]');
-                        return el ? el.textContent.trim() : null;
-                    });
-
-                    if (phone) {
-                        const formattedPhone = phone.replace(/\D/g, '').slice(-10);
-                        // Insert into DB
-                        const result = await pool.query(
-                            `INSERT INTO leads (business_name, phone, city, state, niche, rating, source)
-                         VALUES ($1, $2, $3, $4, $5, $6, 'Google Maps')
-                         ON CONFLICT (phone) DO NOTHING
-                         RETURNING *`,
-                            [name, formattedPhone, city, state, type, rating]
-                        );
-
-                        if (result.rows.length > 0) results.push(result.rows[0]);
-                    }
-                }
-            } catch (e) { console.error(e); }
-        }
-
-        await browser.close();
-        res.json({ success: true, found: results.length, leads: results });
+        console.log(`✅ Scrape complete:`, stats);
+        
+        res.json({ 
+            success: true, 
+            stats,
+            leads: saveToDb ? savedLeads : enrichedLeads 
+        });
 
     } catch (error) {
-        if (browser) await browser.close();
         console.error('❌ Scraping error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/scraper/enrich
+ * Enrich existing leads with website emails
+ * 
+ * Body: {
+ *   leadIds: number[] (optional - if not provided, enriches all leads without emails)
+ *   maxLeads: number (default 100)
+ * }
+ */
+router.post('/enrich', async (req, res) => {
+    const { leadIds, maxLeads = 100 } = req.body;
+
+    try {
+        let leadsToEnrich;
+        
+        if (leadIds && leadIds.length > 0) {
+            // Enrich specific leads
+            const result = await pool.query(
+                `SELECT id, business_name, phone, email, website 
+                 FROM leads WHERE id = ANY($1)`,
+                [leadIds]
+            );
+            leadsToEnrich = result.rows;
+        } else {
+            // Enrich all leads without emails that have websites
+            const result = await pool.query(
+                `SELECT id, business_name, phone, email, website 
+                 FROM leads 
+                 WHERE (email IS NULL OR email = '') 
+                   AND website IS NOT NULL 
+                   AND website != ''
+                 LIMIT $1`,
+                [maxLeeds]
+            );
+            leadsToEnrich = result.rows;
+        }
+
+        if (leadsToEnrich.length === 0) {
+            return res.json({ 
+                success: true, 
+                message: 'No leads to enrich',
+                enriched: 0 
+            });
+        }
+
+        console.log(`📧 Enriching ${leadsToEnrich.length} leads with emails...`);
+
+        // Convert to scraper format
+        const leads = leadsToEnrich.map(l => ({
+            businessName: l.business_name,
+            phone: l.phone,
+            website: l.website
+        }));
+
+        // Enrich
+        const enrichedLeads = await enrichLeadsWithEmails(leads, maxLeads);
+
+        // Update database
+        let updated = 0;
+        for (const lead of enrichedLeads) {
+            if (lead.email) {
+                await pool.query(
+                    `UPDATE leads SET email = $1, updated_at = NOW() WHERE phone = $2`,
+                    [lead.email, lead.phone.replace(/\D/g, '').slice(-10)]
+                );
+                updated++;
+            }
+        }
+
+        res.json({
+            success: true,
+            processed: leadsToEnrich.length,
+            enriched: updated,
+            leads: enrichedLeads.filter(l => l.email)
+        });
+
+    } catch (error) {
+        console.error('❌ Enrichment error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

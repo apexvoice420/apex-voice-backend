@@ -111,7 +111,41 @@ async function scrapeGoogleMaps(city, state, type, maxResults = 20) {
                     const websiteEl = document.querySelector('[data-item-id*="authority"] a');
                     const website = websiteEl ? websiteEl.href : null;
 
-                    return { name, phone, rating, reviews, address, website };
+                    // Email - check multiple possible locations
+                    let email = null;
+                    
+                    // Method 1: Check for email in data-item-id
+                    const emailEl = document.querySelector('[data-item-id*="email"]');
+                    if (emailEl) {
+                        const emailText = emailEl.textContent || emailEl.getAttribute('data-item-id');
+                        const emailMatch = emailText.match(/[\w.-]+@[\w.-]+\.\w+/);
+                        if (emailMatch) email = emailMatch[0];
+                    }
+                    
+                    // Method 2: Search all buttons/links for email pattern
+                    if (!email) {
+                        const allButtons = document.querySelectorAll('button, a, [role="button"]');
+                        for (const btn of allButtons) {
+                            const text = btn.textContent || btn.href || '';
+                            const match = text.match(/[\w.-]+@[\w.-]+\.\w+/);
+                            if (match) {
+                                email = match[0];
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Method 3: Check info section text for email
+                    if (!email) {
+                        const infoSection = document.querySelector('.iP7tXb, .Rfs5Vd, [role="region"]');
+                        if (infoSection) {
+                            const text = infoSection.textContent;
+                            const match = text.match(/[\w.-]+@[\w.-]+\.\w+/);
+                            if (match) email = match[0];
+                        }
+                    }
+
+                    return { name, phone, rating, reviews, address, website, email };
                 });
 
                 if (data.name && data.phone) {
@@ -121,6 +155,7 @@ async function scrapeGoogleMaps(city, state, type, maxResults = 20) {
                     leads.push({
                         businessName: data.name,
                         phone: cleanPhone,
+                        email: data.email || null,
                         city: city,
                         state: state,
                         rating: data.rating || 0,
@@ -132,7 +167,7 @@ async function scrapeGoogleMaps(city, state, type, maxResults = 20) {
                         scrapedAt: new Date().toISOString()
                     });
 
-                    console.log(`✓ ${data.name} - ${cleanPhone}`);
+                    console.log(`✓ ${data.name} - ${cleanPhone}${data.email ? ` - ${data.email}` : ''}`);
                 }
             } catch (itemErr) {
                 console.log('Error extracting listing:', itemErr.message);
@@ -215,4 +250,169 @@ async function scrapeYelp(city, state, type, maxResults = 20) {
     return leads;
 }
 
-module.exports = { scrapeGoogleMaps, scrapeYelp };
+/**
+ * Scrape a website for email addresses
+ * Visits homepage + common contact pages
+ */
+async function scrapeWebsiteForEmail(websiteUrl, browser = null) {
+    let ownBrowser = false;
+    let page = null;
+    
+    if (!browser) {
+        browser = await chromium.launch({
+            headless: true,
+            executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+        ownBrowser = true;
+    }
+
+    const emails = new Set();
+    
+    try {
+        page = await browser.newPage();
+        
+        // Pages to check for emails (in priority order)
+        const urlObj = new URL(websiteUrl);
+        const baseUrl = `${urlObj.protocol}//${urlObj.hostname}`;
+        
+        const pagesToCheck = [
+            websiteUrl,
+            `${baseUrl}/contact`,
+            `${baseUrl}/contact-us`,
+            `${baseUrl}/about`,
+            `${baseUrl}/about-us`,
+        ];
+
+        for (const url of pagesToCheck) {
+            try {
+                await page.goto(url, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 10000
+                });
+
+                await page.waitForTimeout(500);
+
+                // Extract emails from page content
+                const pageEmails = await page.evaluate(() => {
+                    const found = [];
+                    const text = document.body.innerHTML;
+                    
+                    // Regex for email patterns
+                    const emailRegex = /[\w.-]+@[\w.-]+\.\w{2,}/g;
+                    const matches = text.match(emailRegex) || [];
+                    
+                    // Filter out common false positives
+                    const excludePatterns = [
+                        'example.com', 'domain.com', 'email.com', 'youremail',
+                        'sentry', 'google', 'facebook', 'instagram', 'twitter',
+                        'linkedin', 'youtube', 'gmail.com', 'yahoo.com', 'hotmail',
+                        'png', 'jpg', 'svg', 'ico', '.js', '.css', 'schema.org',
+                        'wixpress', 'godaddy', 'squarespace', 'mailchimp'
+                    ];
+                    
+                    for (const email of matches) {
+                        const lower = email.toLowerCase();
+                        const isExcluded = excludePatterns.some(p => lower.includes(p));
+                        
+                        if (!isExcluded && email.includes('.')) {
+                            found.push(email.toLowerCase());
+                        }
+                    }
+                    
+                    return found;
+                });
+
+                pageEmails.forEach(e => emails.add(e));
+                
+                if (emails.size > 0) {
+                    // Found emails, no need to check more pages
+                    break;
+                }
+            } catch (pageErr) {
+                // Page doesn't exist or failed to load, continue
+            }
+        }
+
+    } catch (error) {
+        // Site might be down or blocked
+    } finally {
+        if (page) await page.close();
+        if (ownBrowser && browser) await browser.close();
+    }
+
+    return Array.from(emails);
+}
+
+/**
+ * Enrich leads with emails from their websites
+ * @param {Array} leads - Array of lead objects from scrapeGoogleMaps
+ * @param {number} maxSites - Max websites to scrape (for rate limiting)
+ * @returns {Array} Enriched leads with emails populated
+ */
+async function enrichLeadsWithEmails(leads, maxSites = 50) {
+    console.log(`Enriching ${Math.min(leads.length, maxSites)} leads with website emails...`);
+    
+    const browser = await chromium.launch({
+        headless: true,
+        executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+
+    let enriched = 0;
+
+    try {
+        for (let i = 0; i < leads.length && i < maxSites; i++) {
+            const lead = leads[i];
+            
+            // Skip if already has email from GMB
+            if (lead.email) {
+                console.log(`  [${i + 1}/${leads.length}] ${lead.businessName} - already has email`);
+                continue;
+            }
+            
+            // Skip if no website
+            if (!lead.website) {
+                console.log(`  [${i + 1}/${leads.length}] ${lead.businessName} - no website`);
+                continue;
+            }
+
+            console.log(`  [${i + 1}/${leads.length}] Checking ${lead.website}...`);
+            
+            try {
+                const websiteEmails = await scrapeWebsiteForEmail(lead.website, browser);
+                
+                if (websiteEmails.length > 0) {
+                    // Prioritize info@, contact@, sales@ emails
+                    const priorityEmail = websiteEmails.find(e => 
+                        e.startsWith('info@') || 
+                        e.startsWith('contact@') || 
+                        e.startsWith('sales@') ||
+                        e.startsWith('admin@')
+                    );
+                    
+                    lead.email = priorityEmail || websiteEmails[0];
+                    lead.emailSource = 'website';
+                    lead.allEmails = websiteEmails;
+                    enriched++;
+                    console.log(`    ✓ Found: ${lead.email}`);
+                } else {
+                    console.log(`    ✗ No emails found`);
+                }
+                
+                // Rate limiting - be nice to servers
+                await new Promise(r => setTimeout(r, 800));
+                
+            } catch (err) {
+                console.log(`    ✗ Error: ${err.message}`);
+            }
+        }
+    } finally {
+        await browser.close();
+    }
+
+    console.log(`Enriched ${enriched} leads with emails from websites`);
+    return leads;
+}
+
+module.exports = { scrapeGoogleMaps, scrapeYelp, scrapeWebsiteForEmail, enrichLeadsWithEmails };
