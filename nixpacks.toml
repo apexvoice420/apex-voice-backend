@@ -1,5 +1,0 @@
-[phases.setup]
-nixPkgs = ['...', 'libx11', 'libxcomposite', 'libxdamage', 'libxrandr', 'libatk', 'pango', 'cairo', 'glib', 'gtk3', 'nss', 'nspr', 'cups', 'libdrm', 'dbus', 'libxcb']
-
-[variables]
-PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '0'
