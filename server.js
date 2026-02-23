@@ -390,6 +390,60 @@ app.get('/api/vapi/assistants', async (req, res) => {
     }
 });
 
+// Sync VAPI agents to local database
+app.post('/api/agents/sync-vapi', async (req, res) => {
+    try {
+        const { listAssistants } = require('./src/services/vapi');
+        const assistants = await listAssistants();
+
+        let syncedCount = 0;
+        const results = [];
+
+        for (const assistant of assistants) {
+            // Try to match assistant to a client by business name
+            const matchResult = await pool.query(
+                `SELECT * FROM clients WHERE business_name ILIKE $1`,
+                [`%${assistant.name.replace(' Receptionist', '').replace('Receptionist', '').trim()}%`]
+            );
+
+            if (matchResult.rows.length > 0) {
+                const client = matchResult.rows[0];
+                // Update client with VAPI agent ID if not already set
+                if (!client.vapi_agent_id) {
+                    await pool.query(
+                        `UPDATE clients SET vapi_agent_id = $1, status = 'active', updated_at = NOW() WHERE id = $2`,
+                        [assistant.id, client.id]
+                    );
+                    syncedCount++;
+                }
+                results.push({
+                    assistantId: assistant.id,
+                    assistantName: assistant.name,
+                    matchedClient: client.business_name,
+                    synced: !client.vapi_agent_id
+                });
+            } else {
+                results.push({
+                    assistantId: assistant.id,
+                    assistantName: assistant.name,
+                    matchedClient: null,
+                    synced: false
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            totalAssistants: assistants.length,
+            syncedCount,
+            results
+        });
+    } catch (error) {
+        console.error('VAPI sync error:', error);
+        res.status(500).json({ error: 'Sync failed', message: error.message });
+    }
+});
+
 // ===================
 // SCRAPER ROUTES
 // ===================
