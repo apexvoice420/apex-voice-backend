@@ -381,13 +381,31 @@ app.get('/api/stats', async (req, res) => {
 
 app.get('/api/vapi/assistants', async (req, res) => {
     try {
-        const { listAssistants } = require('./src/services/vapi');
-        const assistants = await listAssistants();
+        // Direct check - bypass module caching
+        const apiKey = process.env.VAPI_API_KEY;
+        
+        if (!apiKey) {
+            return res.json({ 
+                assistants: [],
+                debug: {
+                    hasApiKey: false,
+                    keyPrefix: null,
+                    allKeys: Object.keys(process.env).filter(k => !k.includes('SECRET') && !k.includes('PASSWORD') && !k.includes('TOKEN')).sort()
+                }
+            });
+        }
+
+        const fetch = require('node-fetch');
+        const response = await fetch('https://api.vapi.ai/assistant', {
+            headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        
+        const assistants = response.ok ? await response.json() : [];
         res.json({ 
             assistants,
             debug: {
-                hasApiKey: !!process.env.VAPI_API_KEY,
-                keyPrefix: process.env.VAPI_API_KEY ? process.env.VAPI_API_KEY.slice(0, 8) + '...' : null
+                hasApiKey: true,
+                keyPrefix: apiKey.slice(0, 8) + '...'
             }
         });
     } catch (error) {
