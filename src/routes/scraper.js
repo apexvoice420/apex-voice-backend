@@ -1,12 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const { Pool } = require('pg');
-const { scrapeGoogleMaps, enrichLeadsWithEmails } = require('../scraper');
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
+
+// Lazy load scraper to avoid playwright crash on startup
+let scraperModule = null;
+async function getScraper() {
+    if (!scraperModule) {
+        scraperModule = require('../scraper');
+    }
+    return scraperModule;
+}
 
 /**
  * POST /api/scraper/scrape
@@ -43,6 +51,9 @@ router.post('/scrape', async (req, res) => {
     console.log(`🔍 Starting scrape: ${type} in ${city}, ${state}`);
 
     try {
+        // Lazy load scraper
+        const { scrapeGoogleMaps, enrichLeadsWithEmails } = await getScraper();
+        
         // Step 1: Scrape Google Maps
         const leads = await scrapeGoogleMaps(city, state, type, maxResults);
         
@@ -166,6 +177,9 @@ router.post('/enrich', async (req, res) => {
         }
 
         console.log(`📧 Enriching ${leadsToEnrich.length} leads with emails...`);
+
+        // Lazy load scraper
+        const { enrichLeadsWithEmails } = await getScraper();
 
         // Convert to scraper format
         const leads = leadsToEnrich.map(l => ({

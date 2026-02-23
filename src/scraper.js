@@ -1,4 +1,4 @@
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 
 /**
  * Scrape Google Maps for local businesses

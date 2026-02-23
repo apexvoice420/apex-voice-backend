@@ -394,8 +394,21 @@ app.get('/api/vapi/assistants', async (req, res) => {
 // SCRAPER ROUTES
 // ===================
 
-const scraperRoutes = require('./src/routes/scraper');
-app.use('/api/scraper', scraperRoutes);
+// Lazy load scraper to avoid Playwright issues at startup
+let scraperRoutes = null;
+try {
+    scraperRoutes = require('./src/routes/scraper');
+    app.use('/api/scraper', scraperRoutes);
+} catch (err) {
+    console.log('⚠️ Scraper routes not loaded:', err.message);
+    // Provide fallback routes
+    app.post('/api/scraper/scrape', (req, res) => {
+        res.status(503).json({ error: 'Scraper not available', details: 'Playwright not configured' });
+    });
+    app.post('/api/scraper/enrich', (req, res) => {
+        res.status(503).json({ error: 'Enrichment not available', details: 'Playwright not configured' });
+    });
+}
 
 // ===================
 // VAPI WEBHOOK
