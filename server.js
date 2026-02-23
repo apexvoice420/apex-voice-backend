@@ -751,6 +751,56 @@ app.post('/api/sms/send', async (req, res) => {
 // INITIALIZE DATABASE
 // ===================
 
+// Test SMS endpoint
+app.post('/api/test-sms', async (req, res) => {
+    try {
+        const { sendCallSummarySMS } = require('./src/services/sms');
+        
+        // Send test SMS to the business owner
+        const result = await sendCallSummarySMS(
+            '+13862825413', // Your Twilio number for testing
+            'Test call from (555) 123-4567: Customer interested in roof repair.',
+            'Test Business'
+        );
+        
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get all calls
+app.get('/api/calls', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM calls ORDER BY created_at DESC LIMIT 100');
+        res.json({ calls: result.rows });
+    } catch (error) {
+        console.error('Error fetching calls:', error);
+        res.status(500).json({ error: 'Failed to fetch calls' });
+    }
+});
+
+// Update lead status - FIXED
+app.patch('/api/leads/:id/status', async (req, res) => {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    
+    try {
+        const result = await pool.query(
+            'UPDATE leads SET status = COALESCE($1, status), notes = COALESCE($2, notes), updated_at = NOW() WHERE id = $3 RETURNING *',
+            [status, notes, parseInt(id)]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Database error' });
+    }
+});
+
 const initDatabase = async () => {
     try {
         console.log('Initializing database tables...');
