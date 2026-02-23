@@ -1,7 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { pool } = require('../db');
+const { Pool } = require('pg');
 const { scrapeGoogleMaps, enrichLeadsWithEmails } = require('../scraper');
+
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
 
 /**
  * POST /api/scraper/scrape

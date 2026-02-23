@@ -1,6 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { pool } = require('../db');
+const { Pool } = require('pg');
+
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
 
 // Get all leads with filters
 router.get('/', async (req, res) => {
