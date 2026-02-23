@@ -387,6 +387,58 @@ app.post('/api/clients', async (req, res) => {
     }
 });
 
+// Provision VAPI for existing client
+app.post('/api/clients/:id/provision-vapi', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // Get client
+        const result = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+        const client = result.rows[0];
+
+        if (!client) {
+            return res.status(404).json({ error: 'Client not found' });
+        }
+
+        if (client.vapi_agent_id) {
+            return res.status(400).json({ error: 'AI already provisioned for this client' });
+        }
+
+        // Create VAPI assistant
+        const { createAssistant, provisionPhoneNumber } = require('./src/services/vapi');
+        
+        const assistant = await createAssistant(client);
+        
+        if (!assistant || !assistant.id) {
+            return res.status(500).json({ error: 'Failed to create VAPI assistant' });
+        }
+
+        // Update client with agent ID
+        await pool.query(
+            'UPDATE clients SET vapi_agent_id = $1, status = $2, updated_at = NOW() WHERE id = $3',
+            [assistant.id, 'active', client.id]
+        );
+        client.vapi_agent_id = assistant.id;
+        client.status = 'active';
+
+        // Try to provision phone number
+        const phone = await provisionPhoneNumber(assistant.id);
+        if (phone && phone.number) {
+            await pool.query(
+                'UPDATE clients SET vapi_phone = $1 WHERE id = $2',
+                [phone.number, client.id]
+            );
+            client.vapi_phone = phone.number;
+        }
+
+        res.json({ success: true, client });
+
+    } catch (error) {
+        console.error('VAPI provisioning error:', error);
+        res.status(500).json({ error: 'Failed to provision AI', message: error.message });
+    }
+});
+
 app.put('/api/clients/:id', async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
