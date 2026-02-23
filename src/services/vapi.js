@@ -37,7 +37,7 @@ async function createAssistant(client) {
             ]
         },
         voice: {
-            provider: 'elevenlabs',
+            provider: '11labs',
             voiceId: getVoiceId(client.voice_style || 'professional')
         },
         firstMessage: greeting,
