@@ -1,13 +1,20 @@
 const fetch = require('node-fetch');
 
-const VAPI_API_KEY = process.env.VAPI_API_KEY;
 const VAPI_BASE_URL = 'https://api.vapi.ai';
+
+/**
+ * Get VAPI API key (reads fresh from env each time)
+ */
+function getApiKey() {
+    return process.env.VAPI_API_KEY;
+}
 
 /**
  * Create a VAPI assistant for a client
  */
 async function createAssistant(client) {
-    if (!VAPI_API_KEY) {
+    const apiKey = getApiKey();
+    if (!apiKey) {
         console.log('VAPI_API_KEY not configured, skipping assistant creation');
         return null;
     }
@@ -47,7 +54,7 @@ async function createAssistant(client) {
         const res = await fetch(`${VAPI_BASE_URL}/assistant`, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${VAPI_API_KEY}`,
+                'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(payload)
@@ -72,7 +79,8 @@ async function createAssistant(client) {
  * Buy/provision a phone number for the assistant
  */
 async function provisionPhoneNumber(assistantId, areaCode = '386') {
-    if (!VAPI_API_KEY) {
+    const apiKey = getApiKey();
+    if (!apiKey) {
         console.log('VAPI_API_KEY not configured, skipping phone provisioning');
         return null;
     }
@@ -81,7 +89,7 @@ async function provisionPhoneNumber(assistantId, areaCode = '386') {
         const res = await fetch(`${VAPI_BASE_URL}/phone-number`, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${VAPI_API_KEY}`,
+                'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
