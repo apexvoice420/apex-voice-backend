@@ -125,6 +125,10 @@ app.get('/api/auth/me', async (req, res) => {
 // LEADS ROUTES
 // ===================
 
+const leadsRoutes = require('./src/routes/leads');
+app.use('/api/leads', leadsRoutes);
+
+// Legacy routes for backwards compatibility
 app.get('/leads', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM leads ORDER BY created_at DESC LIMIT 100');
@@ -387,40 +391,11 @@ app.get('/api/vapi/assistants', async (req, res) => {
 });
 
 // ===================
-// SCRAPER ROUTE
+// SCRAPER ROUTES
 // ===================
 
-app.post('/scrape', async (req, res) => {
-    const { city, state, type, maxResults } = req.body;
-    console.log(`Scraping request: ${type} in ${city}, ${state}`);
-
-    try {
-        // Dynamic import to avoid issues if playwright not available
-        const { scrapeGoogleMaps } = require('./scraper');
-        
-        const leads = await scrapeGoogleMaps(city, state, type, maxResults || 10);
-
-        let savedCount = 0;
-        for (const lead of leads) {
-            try {
-                const saved = await pool.query(`
-                    INSERT INTO leads (business_name, phone, city, rating, status)
-                    VALUES ($1, $2, $3, $4, 'New Lead')
-                    ON CONFLICT (phone) DO NOTHING
-                    RETURNING id
-                `, [lead.businessName, lead.phone, lead.city, lead.rating || 0]);
-                if (saved.rowCount > 0) savedCount++;
-            } catch (e) {
-                console.error('Error saving lead:', e);
-            }
-        }
-
-        res.json({ success: true, found: leads.length, saved: savedCount, leads });
-    } catch (err) {
-        console.error('Scraping failed:', err);
-        res.status(500).json({ error: 'Scraping failed', details: err.message });
-    }
-});
+const scraperRoutes = require('./src/routes/scraper');
+app.use('/api/scraper', scraperRoutes);
 
 // ===================
 // VAPI WEBHOOK
@@ -503,13 +478,31 @@ const initDatabase = async () => {
                 id SERIAL PRIMARY KEY,
                 business_name TEXT,
                 phone TEXT UNIQUE,
-                status TEXT DEFAULT 'New Lead',
+                email TEXT,
                 city TEXT,
+                state TEXT,
                 rating DECIMAL,
+                reviews INTEGER,
+                address TEXT,
+                website TEXT,
+                industry TEXT,
+                source TEXT,
+                status TEXT DEFAULT 'New Lead',
                 notes TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
             );
         `);
+
+        // Add missing columns if they don't exist (for existing tables)
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS email TEXT`);
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS state TEXT`);
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS reviews INTEGER`);
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS address TEXT`);
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS website TEXT`);
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS industry TEXT`);
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS source TEXT`);
+        await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS calls (

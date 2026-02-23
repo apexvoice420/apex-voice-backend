@@ -37,9 +37,16 @@ CREATE TABLE IF NOT EXISTS leads (
   id SERIAL PRIMARY KEY,
   business_name TEXT,
   phone TEXT UNIQUE,
+  email TEXT,
   status TEXT DEFAULT 'New Lead',
   city TEXT,
+  state TEXT,
   rating DECIMAL,
+  reviews INTEGER,
+  address TEXT,
+  website TEXT,
+  industry TEXT,
+  source TEXT,
   notes TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
