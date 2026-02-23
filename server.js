@@ -352,9 +352,11 @@ app.post('/api/clients', async (req, res) => {
 
         // Try to create VAPI assistant (non-blocking)
         try {
+            console.log('🔄 Attempting VAPI provisioning for:', client.business_name);
             const { createAssistant, provisionPhoneNumber } = require('./src/services/vapi');
             
             const assistant = await createAssistant(client);
+            console.log('📦 VAPI response:', assistant ? assistant.id : 'null');
             
             if (assistant && assistant.id) {
                 // Update client with VAPI agent ID
@@ -364,6 +366,7 @@ app.post('/api/clients', async (req, res) => {
                 );
                 client.vapi_agent_id = assistant.id;
                 client.status = 'active';
+                console.log('✅ Client updated with VAPI agent');
 
                 // Try to provision phone number
                 const phone = await provisionPhoneNumber(assistant.id);
@@ -374,9 +377,12 @@ app.post('/api/clients', async (req, res) => {
                     );
                     client.vapi_phone = phone.number;
                 }
+            } else {
+                console.log('⚠️ VAPI returned no assistant');
             }
         } catch (vapiError) {
-            console.log('VAPI provisioning skipped:', vapiError.message);
+            console.log('❌ VAPI provisioning error:', vapiError.message);
+            console.log('Stack:', vapiError.stack);
             // Client still created, just without VAPI integration
         }
 

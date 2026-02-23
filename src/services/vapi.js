@@ -14,6 +14,8 @@ function getApiKey() {
  */
 async function createAssistant(client) {
     const apiKey = getApiKey();
+    console.log('🔑 VAPI API Key check:', apiKey ? `Found (${apiKey.slice(0, 8)}...)` : 'NOT FOUND');
+    
     if (!apiKey) {
         console.log('VAPI_API_KEY not configured, skipping assistant creation');
         return null;
@@ -23,6 +25,7 @@ async function createAssistant(client) {
         `Thank you for calling ${client.business_name}. This is your AI assistant. How can I help you today?`;
 
     const systemPrompt = buildSystemPrompt(client);
+    console.log('📝 Creating assistant for:', client.business_name);
 
     const payload = {
         name: `${client.business_name} Receptionist`,
@@ -51,6 +54,7 @@ async function createAssistant(client) {
     };
 
     try {
+        console.log('📤 Sending request to VAPI...');
         const res = await fetch(`${VAPI_BASE_URL}/assistant`, {
             method: 'POST',
             headers: {
@@ -62,7 +66,7 @@ async function createAssistant(client) {
 
         if (!res.ok) {
             const error = await res.text();
-            console.error('VAPI assistant creation failed:', error);
+            console.error('❌ VAPI assistant creation failed:', res.status, error);
             return null;
         }
 
@@ -70,7 +74,8 @@ async function createAssistant(client) {
         console.log(`✅ Created VAPI assistant: ${assistant.id}`);
         return assistant;
     } catch (error) {
-        console.error('Error creating VAPI assistant:', error);
+        console.error('❌ Error creating VAPI assistant:', error.message);
+        console.error('Stack:', error.stack);
         return null;
     }
 }
