@@ -719,6 +719,48 @@ app.post('/webhooks/vapi', async (req, res) => {
 });
 
 // ===================
+// CAL.COM ROUTES
+// ===================
+
+app.get('/api/calendar/bookings', async (req, res) => {
+    try {
+        const { getBookings, formatBooking } = require('./src/services/cal');
+        
+        const today = new Date();
+        const afterStartDate = today.toISOString();
+        
+        // Get next 7 days
+        const nextWeek = new Date(today);
+        nextWeek.setDate(nextWeek.getDate() + 7);
+        const beforeStartDate = nextWeek.toISOString();
+
+        const bookings = await getBookings({ 
+            status: 'confirmed',
+            afterStartDate,
+            beforeStartDate
+        });
+
+        const formatted = bookings.map(formatBooking);
+        
+        res.json({ bookings: formatted });
+    } catch (error) {
+        console.error('Calendar fetch error:', error);
+        res.json({ bookings: [] });
+    }
+});
+
+app.get('/api/calendar/event-types', async (req, res) => {
+    try {
+        const { getEventTypes } = require('./src/services/cal');
+        const eventTypes = await getEventTypes();
+        res.json({ eventTypes });
+    } catch (error) {
+        console.error('Event types fetch error:', error);
+        res.json({ eventTypes: [] });
+    }
+});
+
+// ===================
 // SMS ROUTES
 // ===================
 
