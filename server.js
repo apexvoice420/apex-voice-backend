@@ -719,6 +719,115 @@ app.post('/webhooks/vapi', async (req, res) => {
 });
 
 // ===================
+// APOLLO.IO ROUTES
+// ===================
+
+// Search for leads in Apollo
+app.post('/api/apollo/search', async (req, res) => {
+    try {
+        const { searchPeople, formatPersonForLead } = require('./src/services/apollo');
+        
+        const result = await searchPeople(req.body);
+        
+        if (result.error) {
+            return res.status(500).json({ error: result.error });
+        }
+
+        const leads = result.people.map(formatPersonForLead);
+        
+        res.json({ 
+            success: true,
+            leads,
+            pagination: result.pagination,
+            total: result.people.length
+        });
+    } catch (error) {
+        console.error('Apollo search error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Enrich a lead with Apollo data
+app.post('/api/apollo/enrich', async (req, res) => {
+    const { email } = req.body;
+    
+    if (!email) {
+        return res.status(400).json({ error: 'Email required' });
+    }
+
+    try {
+        const { enrichPerson, formatPersonForLead } = require('./src/services/apollo');
+        
+        const person = await enrichPerson(email);
+        
+        if (!person) {
+            return res.json({ success: false, error: 'Person not found' });
+        }
+
+        const lead = formatPersonForLead(person);
+        
+        res.json({ success: true, lead });
+    } catch (error) {
+        console.error('Apollo enrich error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Import Apollo leads to CRM database
+app.post('/api/apollo/import', async (req, res) => {
+    const { leads } = req.body;
+    
+    if (!leads || !Array.isArray(leads)) {
+        return res.status(400).json({ error: 'Leads array required' });
+    }
+
+    try {
+        const savedLeads = [];
+        
+        for (const lead of leads) {
+            if (!lead.email && !lead.phone) continue;
+            
+            try {
+                const formattedPhone = lead.phone ? lead.phone.replace(/\D/g, '').slice(-10) : null;
+                
+                const result = await pool.query(`
+                    INSERT INTO leads (business_name, phone, email, city, state, industry, website, source, status)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'New Lead')
+                    ON CONFLICT (phone) DO UPDATE SET
+                        email = COALESCE(EXCLUDED.email, leads.email),
+                        updated_at = NOW()
+                    RETURNING *
+                `, [
+                    lead.businessName || lead.company || lead.name,
+                    formattedPhone,
+                    lead.email,
+                    lead.city,
+                    lead.state,
+                    lead.industry,
+                    lead.website,
+                    'apollo'
+                ]);
+                
+                if (result.rows[0]) {
+                    savedLeads.push(result.rows[0]);
+                }
+            } catch (err) {
+                console.error('Error saving Apollo lead:', err.message);
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            imported: savedLeads.length,
+            leads: savedLeads 
+        });
+    } catch (error) {
+        console.error('Apollo import error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ===================
 // CAL.COM ROUTES
 // ===================
 
