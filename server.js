@@ -655,28 +655,96 @@ app.post('/webhooks/vapi', async (req, res) => {
 
     try {
         if (callData.type === 'end-of-call-report') {
-            const { call, transcript, summary } = callData;
+            const { call, transcript, summary, analysis } = callData;
+            const customerPhone = call.customer?.number;
+            const assistantId = call.assistantId;
 
-            if (call.customer && call.customer.number) {
-                console.log(`Call completed for ${call.customer.number}: ${summary}`);
-                
-                await pool.query(`
-                    INSERT INTO calls (phone, transcript, outcome, duration, raw_data)
-                    VALUES ($1, $2, $3, $4, $5)
-                `, [
-                    call.customer.number,
-                    transcript || '',
-                    summary || 'Completed',
-                    call.duration || 0,
-                    JSON.stringify(callData)
-                ]);
+            console.log(`Call completed for ${customerPhone}: ${summary?.slice(0, 50)}...`);
+
+            // Find client by VAPI agent ID
+            let client = null;
+            if (assistantId) {
+                const clientResult = await pool.query(
+                    'SELECT * FROM clients WHERE vapi_agent_id = $1',
+                    [assistantId]
+                );
+                client = clientResult.rows[0];
+            }
+
+            // Save call to database
+            const callResult = await pool.query(`
+                INSERT INTO calls (phone, transcript, outcome, duration, raw_data, client_id)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING *
+            `, [
+                customerPhone || 'unknown',
+                transcript || '',
+                summary || 'Completed',
+                call.duration || 0,
+                JSON.stringify(callData),
+                client?.id || null
+            ]);
+
+            // Send SMS notification to business owner
+            if (client && client.contact_phone && summary) {
+                try {
+                    const { sendCallSummarySMS } = require('./src/services/sms');
+                    await sendCallSummarySMS(
+                        client.contact_phone,
+                        `Call from ${customerPhone}: ${summary}`,
+                        client.business_name
+                    );
+                } catch (smsErr) {
+                    console.log('SMS notification failed:', smsErr.message);
+                }
             }
         }
+
+        // Handle new call started
+        if (callData.type === 'call-started') {
+            console.log('New call started');
+        }
+
     } catch (err) {
         console.error('Webhook error:', err);
     }
 
     res.json({ received: true });
+});
+
+// ===================
+// SMS ROUTES
+// ===================
+
+app.post('/api/sms/send', async (req, res) => {
+    const { to, message, clientId } = req.body;
+    
+    if (!to || !message) {
+        return res.status(400).json({ error: 'Phone number and message required' });
+    }
+
+    try {
+        const { sendLeadSMS } = require('./src/services/sms');
+        
+        let businessName = 'Apex Voice Solutions';
+        if (clientId) {
+            const clientResult = await pool.query('SELECT business_name FROM clients WHERE id = $1', [clientId]);
+            if (clientResult.rows[0]) {
+                businessName = clientResult.rows[0].business_name;
+            }
+        }
+
+        const result = await sendLeadSMS(to, message, businessName);
+        
+        if (result.success) {
+            res.json({ success: true, sid: result.sid });
+        } else {
+            res.status(500).json({ error: result.error });
+        }
+    } catch (error) {
+        console.error('SMS error:', error);
+        res.status(500).json({ error: 'Failed to send SMS' });
+    }
 });
 
 // ===================
