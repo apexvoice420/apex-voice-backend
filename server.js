@@ -1040,6 +1040,21 @@ app.patch('/api/leads/:id/status', async (req, res) => {
     }
 });
 
+// Delete all leads (nuclear option)
+app.delete('/api/leads/all', async (req, res) => {
+    try {
+        const result = await pool.query('DELETE FROM leads RETURNING id');
+        res.json({ 
+            success: true, 
+            deleted: result.rowCount,
+            message: `Deleted ${result.rowCount} leads`
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to delete leads' });
+    }
+});
+
 const initDatabase = async () => {
     try {
         console.log('Initializing database tables...');
