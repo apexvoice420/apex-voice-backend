@@ -383,10 +383,16 @@ app.get('/api/vapi/assistants', async (req, res) => {
     try {
         const { listAssistants } = require('./src/services/vapi');
         const assistants = await listAssistants();
-        res.json({ assistants });
+        res.json({ 
+            assistants,
+            debug: {
+                hasApiKey: !!process.env.VAPI_API_KEY,
+                keyPrefix: process.env.VAPI_API_KEY ? process.env.VAPI_API_KEY.slice(0, 8) + '...' : null
+            }
+        });
     } catch (error) {
         console.error('VAPI list error:', error);
-        res.json({ assistants: [] });
+        res.json({ assistants: [], error: error.message });
     }
 });
 
