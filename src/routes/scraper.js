@@ -116,7 +116,7 @@ router.post('/scrape', async (req, res) => {
                     if (!formattedPhone) continue;
                     
                     const result = await pool.query(
-                        `INSERT INTO leads (business_name, phone, email, city, state, niche, rating, reviews, address, website, source)
+                        `INSERT INTO leads (business_name, phone, email, city, state, industry, rating, reviews, address, website, source)
                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                          ON CONFLICT (phone) DO UPDATE SET
                            email = COALESCE(EXCLUDED.email, leads.email),
