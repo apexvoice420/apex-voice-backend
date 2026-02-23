@@ -761,6 +761,88 @@ app.get('/api/calendar/event-types', async (req, res) => {
 });
 
 // ===================
+// APOLLO ROUTES
+// ===================
+
+app.post('/api/apollo/search', async (req, res) => {
+    try {
+        const { searchPeople, formatPersonForLead } = require('./src/services/apollo');
+        
+        const { titles, locations, page, perPage } = req.body;
+        
+        const result = await searchPeople({
+            titles: titles || [],
+            locations: locations || [],
+            page: page || 1,
+            perPage: perPage || 25
+        });
+
+        const leads = result.people.map(formatPersonForLead);
+        
+        res.json({ 
+            leads,
+            pagination: result.pagination,
+            total: result.pagination?.total_entries || 0
+        });
+    } catch (error) {
+        console.error('Apollo search error:', error);
+        res.status(500).json({ error: 'Search failed', leads: [] });
+    }
+});
+
+app.post('/api/apollo/import', async (req, res) => {
+    try {
+        const { leads } = req.body;
+        
+        if (!leads || !Array.isArray(leads)) {
+            return res.status(400).json({ error: 'Leads array required' });
+        }
+
+        let imported = 0;
+        const errors = [];
+
+        for (const lead of leads) {
+            try {
+                if (!lead.email && !lead.phone) continue;
+                
+                const formattedPhone = lead.phone ? lead.phone.replace(/\D/g, '').slice(-10) : null;
+                
+                await pool.query(`
+                    INSERT INTO leads (business_name, phone, email, city, state, industry, website, source, status)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'apollo', 'New Lead')
+                    ON CONFLICT (phone) DO UPDATE SET
+                        email = COALESCE(EXCLUDED.email, leads.email),
+                        industry = COALESCE(EXCLUDED.industry, leads.industry),
+                        website = COALESCE(EXCLUDED.website, leads.website),
+                        updated_at = NOW()
+                `, [
+                    lead.businessName || lead.company || lead.name,
+                    formattedPhone,
+                    lead.email,
+                    lead.city,
+                    lead.state,
+                    lead.industry,
+                    lead.website
+                ]);
+                
+                imported++;
+            } catch (err) {
+                errors.push({ lead: lead.businessName, error: err.message });
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            imported, 
+            errors: errors.slice(0, 5) 
+        });
+    } catch (error) {
+        console.error('Apollo import error:', error);
+        res.status(500).json({ error: 'Import failed' });
+    }
+});
+
+// ===================
 // SMS ROUTES
 // ===================
 
