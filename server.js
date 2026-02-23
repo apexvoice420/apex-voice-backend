@@ -3,6 +3,9 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const csv = require('csv-parser');
+const stream = require('stream');
 require('dotenv').config();
 
 const app = express();
@@ -21,6 +24,19 @@ app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'apex-voice-secret-key-2026';
 
+// Multer config for CSV uploads
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only CSV files allowed'), false);
+        }
+    }
+});
+
 // ===================
 // HEALTH CHECKS
 // ===================
@@ -29,10 +45,10 @@ app.get('/', (req, res) => {
     res.json({ 
         status: 'ok', 
         message: 'Apex Voice Solutions API 🚀',
-        version: '2.3.1',
+        version: '2.3.2',
         endpoints: {
             auth: ['/api/auth/login', '/api/auth/register'],
-            leads: ['/leads', '/leads/:id'],
+            leads: ['/leads', '/leads/:id', 'POST /api/leads/upload-csv'],
             clients: ['/api/clients'],
             scrape: ['POST /scrape'],
             stats: ['/api/stats']
@@ -170,6 +186,95 @@ app.post('/leads', async (req, res) => {
         }
     }
     res.json({ success: true, count: savedCount });
+});
+
+// CSV Upload endpoint
+app.post('/api/leads/upload-csv', upload.single('file'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const leads = [];
+    const bufferStream = new stream.PassThrough();
+    bufferStream.end(req.file.buffer);
+
+    try {
+        await new Promise((resolve, reject) => {
+            bufferStream
+                .pipe(csv())
+                .on('data', (row) => {
+                    // Map CSV columns to lead object (flexible column names)
+                    const lead = {
+                        businessName: row['Business Name'] || row['businessName'] || row['name'] || row['Name'] || row['Company'] || '',
+                        phone: row['Phone'] || row['phone'] || row['Phone Number'] || row['phoneNumber'] || row['Number'] || '',
+                        email: row['Email'] || row['email'] || row['E-mail'] || null,
+                        city: row['City'] || row['city'] || '',
+                        state: row['State'] || row['state'] || row['ST'] || '',
+                        rating: parseFloat(row['Rating'] || row['rating'] || row['Stars'] || 0),
+                        reviews: parseInt(row['Reviews'] || row['reviews'] || 0),
+                        address: row['Address'] || row['address'] || row['Street'] || null,
+                        website: row['Website'] || row['website'] || row['URL'] || null,
+                        industry: row['Industry'] || row['industry'] || row['Category'] || row['Type'] || 'other',
+                        source: row['Source'] || row['source'] || 'csv-upload'
+                    };
+                    
+                    // Clean phone number
+                    if (lead.phone) {
+                        lead.phone = lead.phone.replace(/\D/g, '').slice(-10);
+                    }
+                    
+                    // Only add if we have minimum data
+                    if (lead.businessName && lead.phone) {
+                        leads.push(lead);
+                    }
+                })
+                .on('end', resolve)
+                .on('error', reject);
+        });
+
+        // Insert leads into database
+        const savedLeads = [];
+        const errors = [];
+        
+        for (const lead of leads) {
+            try {
+                const result = await pool.query(`
+                    INSERT INTO leads (business_name, phone, email, city, state, rating, reviews, address, website, industry, source, status)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'New Lead')
+                    ON CONFLICT (phone) DO UPDATE SET
+                        email = COALESCE(EXCLUDED.email, leads.email),
+                        rating = EXCLUDED.rating,
+                        reviews = EXCLUDED.reviews,
+                        website = COALESCE(EXCLUDED.website, leads.website),
+                        industry = EXCLUDED.industry,
+                        updated_at = NOW()
+                    RETURNING *
+                `, [lead.businessName, lead.phone, lead.email, lead.city, lead.state, lead.rating, lead.reviews, lead.address, lead.website, lead.industry, lead.source]);
+                
+                if (result.rows[0]) {
+                    savedLeads.push(result.rows[0]);
+                }
+            } catch (err) {
+                errors.push({ lead: lead.businessName, error: err.message });
+            }
+        }
+
+        res.json({
+            success: true,
+            stats: {
+                total: leads.length,
+                saved: savedLeads.length,
+                duplicates: leads.length - savedLeads.length - errors.length,
+                errors: errors.length
+            },
+            leads: savedLeads.slice(0, 20), // Return first 20 for preview
+            errors: errors.slice(0, 5) // Show first 5 errors
+        });
+
+    } catch (error) {
+        console.error('CSV upload error:', error);
+        res.status(500).json({ error: 'Failed to process CSV', details: error.message });
+    }
 });
 
 app.put('/leads/:id', async (req, res) => {
