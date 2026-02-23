@@ -1,6 +1,6 @@
 {
   "name": "apex-voice-server",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Backend for Apex Voice Solutions",
   "main": "server.js",
   "scripts": {
