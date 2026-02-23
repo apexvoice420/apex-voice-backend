@@ -119,12 +119,13 @@ async function provisionPhoneNumber(assistantId, areaCode = '386') {
  * Get existing VAPI assistants
  */
 async function listAssistants() {
-    if (!VAPI_API_KEY) return [];
+    const apiKey = getApiKey();
+    if (!apiKey) return [];
 
     try {
         const res = await fetch(`${VAPI_BASE_URL}/assistant`, {
             headers: {
-                'Authorization': `Bearer ${VAPI_API_KEY}`
+                'Authorization': `Bearer ${apiKey}`
             }
         });
 
