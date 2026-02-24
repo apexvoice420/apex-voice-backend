@@ -398,6 +398,139 @@ app.post('/scrape', async (req, res) => {
 });
 
 // ===================
+// AGENT E WORKFLOW ROUTES
+// ===================
+
+const workflowService = require('./services/workflow');
+
+// Get workflow types
+app.get('/api/workflows/types', (req, res) => {
+    res.json({
+        workflows: Object.entries(workflowService.WORKFLOWS).map(([key, value]) => ({
+            type: key,
+            name: value.name,
+            steps: value.steps.length
+        }))
+    });
+});
+
+// Get workflow status for lead
+app.get('/api/workflows/lead/:leadId', async (req, res) => {
+    try {
+        const status = await workflowService.getWorkflowStatus(req.params.leadId);
+        res.json(status);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Start workflow
+app.post('/api/workflows/start', async (req, res) => {
+    try {
+        const { leadId, workflowType } = req.body;
+        const result = await workflowService.startWorkflow(leadId, workflowType);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Cancel workflow
+app.post('/api/workflows/:id/cancel', async (req, res) => {
+    try {
+        const result = await workflowService.cancelWorkflow(req.params.id);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Process pending (cron)
+app.post('/api/workflows/process', async (req, res) => {
+    try {
+        const result = await workflowService.processPendingSteps();
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Send email to lead
+app.post('/api/leads/:id/email', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { type } = req.body;
+        
+        const leadResult = await pool.query('SELECT * FROM leads WHERE id = $1', [id]);
+        if (leadResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+        
+        const lead = leadResult.rows[0];
+        const emailService = require('./services/email');
+        
+        const leadData = {
+            ...lead,
+            firstName: lead.name?.split(' ')[0] || lead.business_name?.split(' ')[0] || 'there',
+            businessType: lead.business_type || lead.niche
+        };
+        
+        let result;
+        switch (type) {
+            case 'cold_intro': result = await emailService.sendColdIntro(leadData); break;
+            case 'demo': result = await emailService.sendDemoConfirmation(leadData); break;
+            case 'follow_up': result = await emailService.sendFollowUp(leadData); break;
+            case 'reactivation': result = await emailService.sendReactivation(leadData); break;
+            default: result = await emailService.sendColdIntro(leadData);
+        }
+        
+        if (result.success) {
+            await pool.query(
+                'UPDATE leads SET email_sent = true, email_type = $1, email_sent_at = NOW() WHERE id = $2',
+                [type || 'manual', id]
+            );
+        }
+        
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Bulk email
+app.post('/api/leads/bulk-email', async (req, res) => {
+    try {
+        const { leadIds, type } = req.body;
+        const emailService = require('./services/email');
+        
+        const result = await pool.query('SELECT * FROM leads WHERE id = ANY($1)', [leadIds]);
+        const leads = result.rows;
+        
+        const results = [];
+        for (const lead of leads) {
+            const leadData = {
+                ...lead,
+                firstName: lead.name?.split(' ')[0] || 'there',
+                businessType: lead.business_type
+            };
+            
+            let emailResult;
+            switch (type) {
+                case 'follow_up': emailResult = await emailService.sendFollowUp(leadData); break;
+                case 'reactivation': emailResult = await emailService.sendReactivation(leadData); break;
+                default: emailResult = await emailService.sendColdIntro(leadData);
+            }
+            
+            results.push({ leadId: lead.id, email: lead.email, ...emailResult });
+        }
+        
+        res.json({ sent: results.filter(r => r.success).length, results });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ===================
 // VAPI WEBHOOK
 // ===================
 
