@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const csv = require('csv-parser');
 const stream = require('stream');
+const fetch = require('node-fetch');
 require('dotenv').config();
 
 const app = express();
@@ -45,7 +46,7 @@ app.get('/', (req, res) => {
     res.json({ 
         status: 'ok', 
         message: 'Apex Voice Solutions API 🚀',
-        version: '2.4.0',
+        version: '2.5.0',
         endpoints: {
             auth: ['/api/auth/login', '/api/auth/register'],
             leads: ['/leads', '/leads/:id', 'POST /api/leads/upload-csv'],
@@ -1235,6 +1236,138 @@ app.post('/api/migrate', async (req, res) => {
     } catch (error) {
         console.error('❌ Migration error:', error.message);
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ===================
+// AGENT E EMAIL SERVICE
+// ===================
+
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const FROM_EMAIL = process.env.FROM_EMAIL || 'maurice.pinnock@apexvoicesolutions.com';
+
+async function sendEmail({ to, subject, html, text }) {
+    if (!RESEND_API_KEY) {
+        console.log('Resend not configured, skipping email');
+        return { success: false, error: 'Resend not configured' };
+    }
+
+    try {
+        const response = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${RESEND_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                from: FROM_EMAIL,
+                to: Array.isArray(to) ? to : [to],
+                subject,
+                html,
+                text: text || html.replace(/<[^>]*>/g, '')
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error('Resend error:', result);
+            return { success: false, error: result.message || 'Email send failed' };
+        }
+
+        console.log(`✅ Email sent: ${result.id}`);
+        return { success: true, id: result.id };
+
+    } catch (error) {
+        console.error('Email send error:', error.message);
+        return { success: false, error: error.message };
+    }
+}
+
+// Email test endpoint
+app.post('/api/email/test', async (req, res) => {
+    const { to } = req.body;
+    
+    if (!to) {
+        return res.status(400).json({ error: 'Email address required' });
+    }
+    
+    const result = await sendEmail({
+        to,
+        subject: 'Test from Agent E 🤖',
+        html: '<h1>Agent E is live!</h1><p>Your email service is working.</p>'
+    });
+    
+    res.json(result);
+});
+
+// Send cold intro to lead
+app.post('/api/email/cold-intro', async (req, res) => {
+    const { leadId } = req.body;
+    
+    try {
+        const leadResult = await pool.query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        const lead = leadResult.rows[0];
+        
+        if (!lead) {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+        
+        const firstName = lead.business_name?.split(' ')[0] || 'there';
+        const subject = `${firstName}, your business is missing calls`;
+        const html = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                <p>Hey ${firstName},</p>
+                <p>Quick question: What happens when a potential customer calls your business at 9 PM?</p>
+                <p>If you're like most local service businesses, that call goes to voicemail. And that customer? They're calling your competitor next.</p>
+                <p><strong>Every missed call is lost revenue.</strong></p>
+                <p>We built Apex Voice Solutions to fix this. Our AI receptionists:</p>
+                <ul>
+                    <li>Answer every call 24/7</li>
+                    <li>Qualify leads while you sleep</li>
+                    <li>Book jobs directly into your calendar</li>
+                    <li>Sound indistinguishable from a human</li>
+                </ul>
+                <p style="margin: 30px 0;">
+                    <a href="https://apexvoicesolutions.org" style="background: #6366f1; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px;">Hear It In Action →</a>
+                </p>
+                <p>Best,<br>Maurice Pinnock<br>Apex Voice Solutions</p>
+            </div>
+        `;
+        
+        const result = await sendEmail({
+            to: lead.email,
+            subject,
+            html
+        });
+        
+        if (result.success) {
+            await pool.query(
+                'UPDATE leads SET email_sent = true, email_type = $1, email_sent_at = NOW() WHERE id = $2',
+                ['cold_intro', leadId]
+            );
+        }
+        
+        res.json(result);
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get email status for leads
+app.get('/api/email/status', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT id, business_name, email, email_sent, email_type, email_sent_at 
+            FROM leads 
+            WHERE email IS NOT NULL 
+            ORDER BY id DESC 
+            LIMIT 50
+        `);
+        res.json(result.rows);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 
