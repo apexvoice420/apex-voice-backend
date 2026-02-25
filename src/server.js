@@ -398,6 +398,17 @@ app.post('/scrape', async (req, res) => {
 });
 
 // ===================
+// MIGRATION ENDPOINT
+// ===================
+
+const { runMigration } = require('./migrate');
+
+app.post('/api/migrate', async (req, res) => {
+    const result = await runMigration();
+    res.json(result);
+});
+
+// ===================
 // AGENT E WORKFLOW ROUTES
 // ===================
 
