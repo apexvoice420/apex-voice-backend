@@ -29,7 +29,7 @@ app.get('/', (req, res) => {
     res.json({ 
         status: 'ok', 
         message: 'Apex Voice Solutions API 🚀',
-        version: '2.0.0',
+        version: '2.6.0',
         endpoints: {
             auth: ['/api/auth/login', '/api/auth/register'],
             leads: ['/leads', '/leads/:id'],
