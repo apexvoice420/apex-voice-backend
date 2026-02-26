@@ -46,7 +46,7 @@ app.get('/', (req, res) => {
     res.json({ 
         status: 'ok', 
         message: 'Apex Voice Solutions API 🚀',
-        version: '2.5.0',
+        version: '2.6.0',
         endpoints: {
             auth: ['/api/auth/login', '/api/auth/register'],
             leads: ['/leads', '/leads/:id', 'POST /api/leads/upload-csv'],
@@ -1245,12 +1245,15 @@ app.post('/api/migrate', async (req, res) => {
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'maurice.pinnock@apexvoicesolutions.com';
+const TEST_FROM_EMAIL = 'onboarding@resend.dev'; // Resend's test domain (works without verification)
 
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, useTestDomain = false }) {
     if (!RESEND_API_KEY) {
         console.log('Resend not configured, skipping email');
         return { success: false, error: 'Resend not configured' };
     }
+
+    const fromAddress = useTestDomain ? TEST_FROM_EMAIL : FROM_EMAIL;
 
     try {
         const response = await fetch('https://api.resend.com/emails', {
@@ -1260,7 +1263,7 @@ async function sendEmail({ to, subject, html, text }) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                from: FROM_EMAIL,
+                from: fromAddress,
                 to: Array.isArray(to) ? to : [to],
                 subject,
                 html,
@@ -1284,18 +1287,67 @@ async function sendEmail({ to, subject, html, text }) {
     }
 }
 
-// Email test endpoint
+// Email test endpoint - uses Resend's test domain
 app.post('/api/email/test', async (req, res) => {
-    const { to } = req.body;
+    const { to, template } = req.body;
     
     if (!to) {
         return res.status(400).json({ error: 'Email address required' });
     }
     
+    const firstName = 'Maurice';
+    const businessType = 'Roofing';
+    
+    const templates = {
+        cold_intro: {
+            subject: `${firstName}, your ${businessType} business is missing calls`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                    <div style="background: #fef3c7; padding: 10px; text-align: center; font-weight: bold;">
+                        🧪 TEST EMAIL FROM AGENT E
+                    </div>
+                    <p>Hey ${firstName},</p>
+                    <p>Quick question: What happens when a potential customer calls your ${businessType} business at 9 PM?</p>
+                    <p>If you're like most local service businesses, that call goes to voicemail. And that customer? They're calling your competitor next.</p>
+                    <p><strong>Every missed call is lost revenue.</strong></p>
+                    <p>We built Apex Voice Solutions to fix this. Our AI receptionists:</p>
+                    <ul>
+                        <li>Answer every call 24/7</li>
+                        <li>Qualify leads while you sleep</li>
+                        <li>Book jobs directly into your calendar</li>
+                        <li>Sound indistinguishable from a human</li>
+                    </ul>
+                    <p style="margin: 30px 0;">
+                        <a href="https://apexvoicesolutions.org" style="background: #6366f1; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px;">Hear It In Action →</a>
+                    </p>
+                    <p>Best,<br>Maurice Pinnock<br>Apex Voice Solutions</p>
+                </div>
+            `
+        },
+        follow_up: {
+            subject: `Still interested in never missing a call, ${firstName}?`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                    <div style="background: #fef3c7; padding: 10px; text-align: center; font-weight: bold;">
+                        🧪 TEST FOLLOW-UP EMAIL
+                    </div>
+                    <p>Hey ${firstName},</p>
+                    <p>I reached out a few days ago about solving the missed call problem for your ${businessType} business.</p>
+                    <p>Quick math: If you miss just 2 calls a week at an average job value of $500, that's <strong>$52,000 in lost revenue per year</strong>.</p>
+                    <p>Our AI receptionist costs less than a single missed job per month.</p>
+                    <p>Best,<br>Maurice Pinnock<br>Apex Voice Solutions</p>
+                </div>
+            `
+        }
+    };
+    
+    const selectedTemplate = templates[template] || templates.cold_intro;
+    
     const result = await sendEmail({
         to,
-        subject: 'Test from Agent E 🤖',
-        html: '<h1>Agent E is live!</h1><p>Your email service is working.</p>'
+        subject: `[TEST] ${selectedTemplate.subject}`,
+        html: selectedTemplate.html,
+        useTestDomain: true  // Uses onboarding@resend.dev
     });
     
     res.json(result);
