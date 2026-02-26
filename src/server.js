@@ -522,21 +522,14 @@ app.post('/api/leads/:id/email', async (req, res) => {
 // Test Agent E email (send test email without lead)
 app.post('/api/email/test', async (req, res) => {
     try {
-        const { to } = req.body;
+        const { to, template } = req.body;
         const emailService = require('./services/email');
         
-        // Create test lead data
-        const testLead = {
-            firstName: 'Maurice',
-            businessType: 'Roofing',
-            business_name: 'Test Roofing Co',
-            city: 'Daytona Beach',
-            rating: 4.8,
-            reviews: 127
-        };
-        
-        const result = await emailService.sendColdIntro(testLead);
-        res.json({ success: result.success, id: result.id, error: result.error });
+        const result = await emailService.sendTestEmail(
+            to || 'maurice.pinnock@apexvoicesolutions.com',
+            template || 'cold_intro'
+        );
+        res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

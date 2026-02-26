@@ -7,6 +7,7 @@ const fetch = require('node-fetch');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'maurice.pinnock@apexvoicesolutions.com';
+const TEST_FROM_EMAIL = 'onboarding@resend.dev'; // Resend's test domain
 
 /**
  * Send email via Resend API
@@ -223,6 +224,76 @@ function getReactivationTemplate(firstName, businessType) {
 }
 
 /**
+ * Send test email using Resend's test domain
+ * Works without domain verification
+ */
+async function sendTestEmail(to, template = 'cold_intro') {
+    const testLead = {
+        firstName: 'Maurice',
+        businessType: 'Roofing',
+        business_name: 'Test Roofing Co',
+        city: 'Daytona Beach',
+        rating: 4.8,
+        reviews: 127
+    };
+
+    let subject, html;
+    
+    switch (template) {
+        case 'follow_up':
+            ({ subject, html } = getFollowUpTemplate(testLead.firstName, testLead.businessType));
+            break;
+        case 'demo':
+            ({ subject, html } = getDemoConfirmationTemplate(testLead.firstName, 'Tomorrow at 2pm'));
+            break;
+        case 'reactivation':
+            ({ subject, html } = getReactivationTemplate(testLead.firstName, testLead.businessType));
+            break;
+        default:
+            ({ subject, html } = getColdIntroTemplate(testLead.firstName, testLead.businessType));
+    }
+
+    // Add test banner
+    html = `
+        <div style="background: #fef3c7; padding: 10px; text-align: center; font-weight: bold;">
+            🧪 TEST EMAIL FROM AGENT E
+        </div>
+        ${html}
+    `;
+
+    try {
+        const response = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${RESEND_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                from: TEST_FROM_EMAIL,
+                to: [to],
+                subject: `[TEST] ${subject}`,
+                html,
+                text: html.replace(/<[^>]*>/g, '')
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error('Resend error:', result);
+            return { success: false, error: result.message || 'Email send failed' };
+        }
+
+        console.log(`✅ Test email sent: ${result.id}`);
+        return { success: true, id: result.id };
+
+    } catch (error) {
+        console.error('Test email error:', error.message);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
  * Send cold intro email to new lead
  */
 async function sendColdIntro(lead) {
@@ -307,6 +378,7 @@ async function processLeadWithAgentE(lead) {
 
 module.exports = {
     sendEmail,
+    sendTestEmail,
     sendColdIntro,
     sendDemoConfirmation,
     sendFollowUp,
