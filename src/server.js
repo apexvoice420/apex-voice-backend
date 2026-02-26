@@ -131,10 +131,21 @@ app.post('/leads', async (req, res) => {
     for (const lead of leads) {
         try {
             await pool.query(`
-                INSERT INTO leads (business_name, phone, city, rating, status)
-                VALUES ($1, $2, $3, $4, 'New Lead')
+                INSERT INTO leads (business_name, phone, email, city, state, rating, reviews, website, industry, source, status)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'New Lead')
                 ON CONFLICT (phone) DO NOTHING
-            `, [lead.businessName || lead.name, lead.phoneNumber || lead.phone, lead.city, lead.rating || 0]);
+            `, [
+                lead.businessName || lead.name, 
+                lead.phoneNumber || lead.phone, 
+                lead.email || null,
+                lead.city, 
+                lead.state || null,
+                lead.rating || 0,
+                lead.reviews || null,
+                lead.website || null,
+                lead.industry || lead.businessType || null,
+                lead.source || 'scraper'
+            ]);
             savedCount++;
         } catch (e) {
             console.error('Error saving lead:', e);
@@ -503,6 +514,29 @@ app.post('/api/leads/:id/email', async (req, res) => {
         }
         
         res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test Agent E email (send test email without lead)
+app.post('/api/email/test', async (req, res) => {
+    try {
+        const { to } = req.body;
+        const emailService = require('./services/email');
+        
+        // Create test lead data
+        const testLead = {
+            firstName: 'Maurice',
+            businessType: 'Roofing',
+            business_name: 'Test Roofing Co',
+            city: 'Daytona Beach',
+            rating: 4.8,
+            reviews: 127
+        };
+        
+        const result = await emailService.sendColdIntro(testLead);
+        res.json({ success: result.success, id: result.id, error: result.error });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
