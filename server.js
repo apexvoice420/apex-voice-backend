@@ -1274,6 +1274,66 @@ const initDatabase = async () => {
             );
         `);
 
+        // Campaigns table for Agent E
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS campaigns (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT DEFAULT 'draft',
+                emails_sent INTEGER DEFAULT 0,
+                open_rate DECIMAL,
+                reply_rate DECIMAL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                started_at TIMESTAMP
+            );
+        `);
+
+        // Campaign leads junction table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS campaign_leads (
+                id SERIAL PRIMARY KEY,
+                campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+                lead_id INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+                status TEXT DEFAULT 'pending',
+                added_at TIMESTAMP DEFAULT NOW(),
+                sent_at TIMESTAMP,
+                opened_at TIMESTAMP,
+                UNIQUE(campaign_id, lead_id)
+            );
+        `);
+
+        // Email logs for tracking
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS email_logs (
+                id SERIAL PRIMARY KEY,
+                lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+                campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
+                to_email TEXT NOT NULL,
+                subject TEXT,
+                body TEXT,
+                status TEXT DEFAULT 'sent',
+                resend_id TEXT,
+                error_message TEXT,
+                sent_at TIMESTAMP DEFAULT NOW(),
+                opened_at TIMESTAMP
+            );
+        `);
+
+        // Client documents for onboarding
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS client_documents (
+                id SERIAL PRIMARY KEY,
+                client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+                document_type TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_data TEXT,
+                file_size INTEGER,
+                mime_type TEXT,
+                uploaded_at TIMESTAMP DEFAULT NOW()
+            );
+        `);
+
         console.log('✅ Database tables initialized');
     } catch (error) {
         console.error('Database init error:', error.message);
