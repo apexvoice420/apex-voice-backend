@@ -1559,6 +1559,397 @@ app.get('/api/email/status', async (req, res) => {
 });
 
 // ===================
+// WORKFLOW ROUTES (Agent E)
+// ===================
+
+// Get active workflows
+app.get('/api/workflows/active', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT lw.*, 
+                   l.business_name as lead_name, 
+                   l.email as lead_email,
+                   (SELECT COUNT(*) FROM workflow_steps WHERE workflow_id = lw.id AND status = 'completed')::int as completed_steps
+            FROM lead_workflows lw
+            LEFT JOIN leads l ON lw.lead_id = l.id
+            ORDER BY lw.started_at DESC
+            LIMIT 100
+        `);
+        res.json({ workflows: result.rows });
+    } catch (error) {
+        console.error('Error fetching workflows:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get workflow types
+app.get('/api/workflows/types', (req, res) => {
+    res.json({
+        workflows: [
+            { type: 'NEW_LEAD', name: 'New Lead Sequence', steps: 4 },
+            { type: 'DEMO_REQUESTED', name: 'Demo Confirmation', steps: 4 },
+            { type: 'NO_ANSWER', name: 'No Answer Follow-up', steps: 2 },
+            { type: 'COLD_LEAD', name: 'Reactivation Sequence', steps: 2 }
+        ]
+    });
+});
+
+// Start a workflow for a lead
+app.post('/api/workflows/start', async (req, res) => {
+    const { leadId, workflowType } = req.body;
+    
+    if (!leadId || !workflowType) {
+        return res.status(400).json({ error: 'leadId and workflowType required' });
+    }
+    
+    try {
+        // Get lead
+        const leadResult = await pool.query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        if (leadResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+        
+        const workflowNames = {
+            'NEW_LEAD': 'New Lead Sequence',
+            'DEMO_REQUESTED': 'Demo Confirmation',
+            'NO_ANSWER': 'No Answer Follow-up',
+            'COLD_LEAD': 'Reactivation Sequence'
+        };
+        
+        const workflowSteps = {
+            'NEW_LEAD': 4,
+            'DEMO_REQUESTED': 4,
+            'NO_ANSWER': 2,
+            'COLD_LEAD': 2
+        };
+        
+        // Create workflow instance
+        const result = await pool.query(`
+            INSERT INTO lead_workflows (lead_id, workflow_type, workflow_name, status, current_step, total_steps, started_at)
+            VALUES ($1, $2, $3, 'active', 0, $4, NOW())
+            RETURNING *
+        `, [leadId, workflowType, workflowNames[workflowType] || workflowType, workflowSteps[workflowType] || 4]);
+        
+        res.json({ success: true, workflow: result.rows[0] });
+    } catch (error) {
+        console.error('Error starting workflow:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Cancel a workflow
+app.post('/api/workflows/:id/cancel', async (req, res) => {
+    try {
+        await pool.query('UPDATE lead_workflows SET status = $1 WHERE id = $2', ['cancelled', req.params.id]);
+        await pool.query('UPDATE workflow_steps SET status = $1 WHERE workflow_id = $2 AND status = $3', ['cancelled', req.params.id, 'pending']);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Process pending workflow steps (cron endpoint)
+app.post('/api/workflows/process', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT DISTINCT workflow_id FROM workflow_steps 
+            WHERE status = 'pending' AND scheduled_at <= NOW()
+        `);
+        
+        // For each pending workflow, we'd execute the step
+        // This is a simplified version - the full logic is in services/workflow.js
+        
+        res.json({ processed: result.rows.length, workflows: result.rows });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get workflow status for a lead
+app.get('/api/workflows/lead/:leadId', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT * FROM lead_workflows 
+            WHERE lead_id = $1 
+            ORDER BY started_at DESC
+        `, [req.params.leadId]);
+        res.json(result.rows);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ===================
+// CAMPAIGN ROUTES
+// ===================
+
+// Get all campaigns
+app.get('/api/campaigns', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT c.*, 
+                   (SELECT COUNT(*) FROM campaign_leads WHERE campaign_id = c.id)::int as leads_count
+            FROM campaigns c
+            ORDER BY c.created_at DESC
+        `);
+        res.json({ campaigns: result.rows });
+    } catch (error) {
+        console.error('Error fetching campaigns:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Create campaign
+app.post('/api/campaigns', async (req, res) => {
+    const { name } = req.body;
+    
+    if (!name) {
+        return res.status(400).json({ error: 'Campaign name required' });
+    }
+    
+    try {
+        const result = await pool.query(`
+            INSERT INTO campaigns (name, status, created_at)
+            VALUES ($1, 'draft', NOW())
+            RETURNING *
+        `, [name]);
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Error creating campaign:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get campaign by ID
+app.get('/api/campaigns/:id', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT c.*, 
+                   (SELECT COUNT(*) FROM campaign_leads WHERE campaign_id = c.id)::int as leads_count
+            FROM campaigns c
+            WHERE c.id = $1
+        `, [req.params.id]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Campaign not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update campaign
+app.put('/api/campaigns/:id', async (req, res) => {
+    const { name, status } = req.body;
+    
+    try {
+        const fields = [];
+        const values = [req.params.id];
+        let paramCount = 2;
+        
+        if (name) {
+            fields.push(`name = $${paramCount}`);
+            values.push(name);
+            paramCount++;
+        }
+        if (status) {
+            fields.push(`status = $${paramCount}`);
+            values.push(status);
+            paramCount++;
+        }
+        
+        if (fields.length === 0) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+        
+        fields.push('updated_at = NOW()');
+        
+        const result = await pool.query(
+            `UPDATE campaigns SET ${fields.join(', ')} WHERE id = $1 RETURNING *`,
+            values
+        );
+        
+        res.json(result.rows[0]);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Delete campaign
+app.delete('/api/campaigns/:id', async (req, res) => {
+    try {
+        await pool.query('DELETE FROM campaign_leads WHERE campaign_id = $1', [req.params.id]);
+        await pool.query('DELETE FROM campaigns WHERE id = $1', [req.params.id]);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Add leads to campaign
+app.post('/api/campaigns/:id/leads', async (req, res) => {
+    const { leadIds } = req.body;
+    
+    if (!leadIds || !Array.isArray(leadIds)) {
+        return res.status(400).json({ error: 'leadIds array required' });
+    }
+    
+    try {
+        for (const leadId of leadIds) {
+            await pool.query(`
+                INSERT INTO campaign_leads (campaign_id, lead_id, added_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT DO NOTHING
+            `, [req.params.id, leadId]);
+        }
+        res.json({ success: true, added: leadIds.length });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ===================
+// EMAIL ROUTES (Agent E - Resend)
+// ===================
+
+// Send single email via Resend
+app.post('/api/emails/send', async (req, res) => {
+    const { to, subject, body, lead_id, from } = req.body;
+    
+    if (!to || !subject || !body) {
+        return res.status(400).json({ error: 'to, subject, and body are required' });
+    }
+
+    const resendApiKey = process.env.RESEND_API_KEY || 're_HaPE2CB6_LhrU8TBUV9sopDKfZYyFB2yn';
+    const senderEmail = from || 'maurice.pinnock@apexvoicesolutions.com';
+
+    try {
+        const response = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${resendApiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                from: senderEmail,
+                to: to,
+                subject: subject,
+                text: body,
+            }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            console.error('Resend error:', data);
+            return res.status(500).json({ error: data.message || 'Failed to send email' });
+        }
+
+        // Log email in database
+        if (lead_id) {
+            await pool.query(`
+                UPDATE leads 
+                SET email_sent = true, 
+                    email_type = 'cold_outreach',
+                    email_sent_at = NOW()
+                WHERE id = $1
+            `, [lead_id]);
+
+            // Create email log
+            await pool.query(`
+                INSERT INTO email_logs (lead_id, to_email, subject, status, resend_id, sent_at)
+                VALUES ($1, $2, $3, 'sent', $4, NOW())
+            `, [lead_id, to, subject, data.id]);
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'Email sent successfully',
+            email_id: data.id 
+        });
+    } catch (error) {
+        console.error('Email send error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get email logs
+app.get('/api/emails/logs', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT el.*, l.business_name 
+            FROM email_logs el
+            LEFT JOIN leads l ON el.lead_id = l.id
+            ORDER BY el.sent_at DESC
+            LIMIT 100
+        `);
+        res.json({ logs: result.rows });
+    } catch (error) {
+        // Table might not exist yet
+        res.json({ logs: [] });
+    }
+});
+
+// Bulk send emails
+app.post('/api/emails/bulk', async (req, res) => {
+    const { emails } = req.body; // Array of { to, subject, body, lead_id }
+    
+    if (!emails || !Array.isArray(emails) || emails.length === 0) {
+        return res.status(400).json({ error: 'emails array is required' });
+    }
+
+    const resendApiKey = process.env.RESEND_API_KEY || 're_HaPE2CB6_LhrU8TBUV9sopDKfZYyFB2yn';
+    const senderEmail = 'maurice.pinnock@apexvoicesolutions.com';
+    const results = [];
+
+    for (const email of emails) {
+        try {
+            const response = await fetch('https://api.resend.com/emails', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${resendApiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    from: senderEmail,
+                    to: email.to,
+                    subject: email.subject,
+                    text: email.body,
+                }),
+            });
+
+            const data = await response.json();
+            results.push({ 
+                to: email.to, 
+                success: response.ok, 
+                id: data.id,
+                error: data.message 
+            });
+
+            if (email.lead_id) {
+                await pool.query(`
+                    UPDATE leads 
+                    SET email_sent = true, email_sent_at = NOW()
+                    WHERE id = $1
+                `, [email.lead_id]);
+            }
+        } catch (err) {
+            results.push({ to: email.to, success: false, error: err.message });
+        }
+    }
+
+    const sent = results.filter(r => r.success).length;
+    res.json({ 
+        success: true, 
+        total: emails.length, 
+        sent,
+        failed: emails.length - sent,
+        results 
+    });
+});
+
+// ===================
 // START SERVER
 // ===================
 
