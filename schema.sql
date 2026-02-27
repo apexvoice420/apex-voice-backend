@@ -63,3 +63,15 @@ CREATE TABLE IF NOT EXISTS calls (
   raw_data JSONB,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Client documents table for onboarding uploads
+CREATE TABLE IF NOT EXISTS client_documents (
+  id SERIAL PRIMARY KEY,
+  client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+  document_type TEXT NOT NULL, -- 'services_pdf', 'pricing_sheet', 'faq_document', 'custom_script', 'other'
+  file_name TEXT NOT NULL,
+  file_data TEXT, -- Base64 encoded file data
+  file_size INTEGER,
+  mime_type TEXT,
+  uploaded_at TIMESTAMP DEFAULT NOW()
+);

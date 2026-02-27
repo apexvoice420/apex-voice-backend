@@ -51,6 +51,22 @@ async function runMigration() {
         
         console.log('✅ Created workflow_steps table');
         
+        // Create client_documents table for onboarding uploads
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS client_documents (
+                id SERIAL PRIMARY KEY,
+                client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+                document_type VARCHAR(50) NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size INTEGER,
+                mime_type VARCHAR(100),
+                uploaded_at TIMESTAMP DEFAULT NOW()
+            )
+        `);
+        
+        console.log('✅ Created client_documents table');
+        
         // Verify tables exist
         const tables = await pool.query(`
             SELECT table_name FROM information_schema.tables 

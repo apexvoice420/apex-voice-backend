@@ -504,6 +504,141 @@ app.delete('/api/clients/:id', async (req, res) => {
 });
 
 // ===================
+// CLIENT DOCUMENTS ROUTES
+// ===================
+
+// Multer config for document uploads
+const documentUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+        if (allowedTypes.includes(file.mimetype) || 
+            file.originalname.endsWith('.pdf') || 
+            file.originalname.endsWith('.png') || 
+            file.originalname.endsWith('.jpg') || 
+            file.originalname.endsWith('.jpeg') ||
+            file.originalname.endsWith('.doc') ||
+            file.originalname.endsWith('.docx') ||
+            file.originalname.endsWith('.txt')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Invalid file type. Allowed: PDF, PNG, JPG, DOC, DOCX, TXT'), false);
+        }
+    }
+});
+
+// Upload document for a client
+app.post('/api/clients/:id/documents', documentUpload.single('document'), async (req, res) => {
+    const { id } = req.params;
+    const { documentType } = req.body;
+
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    if (!documentType) {
+        return res.status(400).json({ error: 'Document type is required' });
+    }
+
+    try {
+        // Check if client exists
+        const clientCheck = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+        if (clientCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Client not found' });
+        }
+
+        // Convert file to base64
+        const fileData = req.file.buffer.toString('base64');
+        const fileName = req.file.originalname;
+        const fileSize = req.file.size;
+        const mimeType = req.file.mimetype;
+
+        const result = await pool.query(`
+            INSERT INTO client_documents (client_id, document_type, file_name, file_data, file_size, mime_type)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, document_type, file_name, file_size, mime_type, uploaded_at
+        `, [id, documentType, fileName, fileData, fileSize, mimeType]);
+
+        res.status(201).json({ 
+            success: true, 
+            document: result.rows[0] 
+        });
+    } catch (error) {
+        console.error('Document upload error:', error);
+        res.status(500).json({ error: 'Failed to upload document' });
+    }
+});
+
+// Get all documents for a client
+app.get('/api/clients/:id/documents', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const result = await pool.query(`
+            SELECT id, document_type, file_name, file_size, mime_type, uploaded_at 
+            FROM client_documents 
+            WHERE client_id = $1 
+            ORDER BY uploaded_at DESC
+        `, [id]);
+
+        res.json({ documents: result.rows });
+    } catch (error) {
+        console.error('Error fetching documents:', error);
+        res.status(500).json({ error: 'Failed to fetch documents' });
+    }
+});
+
+// Get a specific document (with file data for download)
+app.get('/api/clients/:clientId/documents/:docId', async (req, res) => {
+    const { clientId, docId } = req.params;
+
+    try {
+        const result = await pool.query(`
+            SELECT * FROM client_documents 
+            WHERE id = $1 AND client_id = $2
+        `, [docId, clientId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+
+        const doc = result.rows[0];
+        
+        // Return the file for download
+        const buffer = Buffer.from(doc.file_data, 'base64');
+        res.setHeader('Content-Type', doc.mime_type);
+        res.setHeader('Content-Disposition', `attachment; filename="${doc.file_name}"`);
+        res.send(buffer);
+    } catch (error) {
+        console.error('Error fetching document:', error);
+        res.status(500).json({ error: 'Failed to fetch document' });
+    }
+});
+
+// Delete a document
+app.delete('/api/clients/:clientId/documents/:docId', async (req, res) => {
+    const { clientId, docId } = req.params;
+
+    try {
+        const result = await pool.query(`
+            DELETE FROM client_documents 
+            WHERE id = $1 AND client_id = $2 
+            RETURNING id
+        `, [docId, clientId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+
+        res.json({ success: true, message: 'Document deleted' });
+    } catch (error) {
+        console.error('Error deleting document:', error);
+        res.status(500).json({ error: 'Failed to delete document' });
+    }
+});
+
+// ===================
 // STATS ROUTE
 // ===================
 

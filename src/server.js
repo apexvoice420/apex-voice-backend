@@ -3,6 +3,9 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -18,6 +21,45 @@ app.locals.db = pool;
 
 app.use(cors());
 app.use(express.json());
+
+// ===================
+// FILE UPLOAD CONFIG
+// ===================
+
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const clientDir = path.join(uploadsDir, req.params.clientId || 'temp');
+        if (!fs.existsSync(clientDir)) {
+            fs.mkdirSync(clientDir, { recursive: true });
+        }
+        cb(null, clientDir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const ext = path.extname(file.originalname);
+        cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+    }
+});
+
+const upload = multer({ 
+    storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = ['application/pdf', 'text/plain', 'application/msword', 
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'text/csv', 'application/vnd.ms-excel'];
+        if (allowedTypes.includes(file.mimetype) || file.mimetype.startsWith('text/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Invalid file type. PDF, DOC, DOCX, TXT, CSV allowed.'));
+        }
+    }
+});
 
 const JWT_SECRET = process.env.JWT_SECRET || 'apex-voice-secret-key-2026';
 
@@ -318,6 +360,122 @@ app.delete('/api/clients/:id', async (req, res) => {
     } catch (error) {
         console.error('Error deleting client:', error);
         res.status(500).json({ error: 'Failed to delete client' });
+    }
+});
+
+// ===================
+// CLIENT DOCUMENTS ROUTES
+// ===================
+
+// Get all documents for a client
+app.get('/api/clients/:clientId/documents', async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM client_documents WHERE client_id = $1 ORDER BY uploaded_at DESC',
+            [req.params.clientId]
+        );
+        res.json({ documents: result.rows });
+    } catch (error) {
+        console.error('Error fetching documents:', error);
+        res.status(500).json({ error: 'Failed to fetch documents' });
+    }
+});
+
+// Upload document for client
+app.post('/api/clients/:clientId/documents', upload.single('document'), async (req, res) => {
+    const { clientId } = req.params;
+    const { documentType } = req.body;
+    
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+    }
+    
+    if (!documentType) {
+        return res.status(400).json({ error: 'Document type is required' });
+    }
+    
+    try {
+        // Verify client exists
+        const clientCheck = await pool.query('SELECT id FROM clients WHERE id = $1', [clientId]);
+        if (clientCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Client not found' });
+        }
+        
+        const result = await pool.query(`
+            INSERT INTO client_documents (client_id, document_type, file_name, file_path, file_size, mime_type)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+        `, [
+            clientId,
+            documentType,
+            req.file.originalname,
+            req.file.path,
+            req.file.size,
+            req.file.mimetype
+        ]);
+        
+        res.status(201).json({ document: result.rows[0] });
+    } catch (error) {
+        console.error('Error uploading document:', error);
+        res.status(500).json({ error: 'Failed to upload document' });
+    }
+});
+
+// Delete document
+app.delete('/api/clients/:clientId/documents/:docId', async (req, res) => {
+    const { clientId, docId } = req.params;
+    
+    try {
+        const docResult = await pool.query(
+            'SELECT * FROM client_documents WHERE id = $1 AND client_id = $2',
+            [docId, clientId]
+        );
+        
+        if (docResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+        
+        const doc = docResult.rows[0];
+        
+        // Delete file from filesystem
+        if (fs.existsSync(doc.file_path)) {
+            fs.unlinkSync(doc.file_path);
+        }
+        
+        // Delete from database
+        await pool.query('DELETE FROM client_documents WHERE id = $1', [docId]);
+        
+        res.json({ success: true, message: 'Document deleted' });
+    } catch (error) {
+        console.error('Error deleting document:', error);
+        res.status(500).json({ error: 'Failed to delete document' });
+    }
+});
+
+// Download document
+app.get('/api/clients/:clientId/documents/:docId/download', async (req, res) => {
+    const { clientId, docId } = req.params;
+    
+    try {
+        const result = await pool.query(
+            'SELECT * FROM client_documents WHERE id = $1 AND client_id = $2',
+            [docId, clientId]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+        
+        const doc = result.rows[0];
+        
+        if (!fs.existsSync(doc.file_path)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+        
+        res.download(doc.file_path, doc.file_name);
+    } catch (error) {
+        console.error('Error downloading document:', error);
+        res.status(500).json({ error: 'Failed to download document' });
     }
 });
 
