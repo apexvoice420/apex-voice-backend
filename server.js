@@ -297,6 +297,26 @@ app.put('/leads/:id', async (req, res) => {
     }
 });
 
+// PATCH alias for drag-and-drop pipeline
+app.patch('/leads/:id', async (req, res) => {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    
+    try {
+        const result = await pool.query(
+            'UPDATE leads SET status = COALESCE($1, status), notes = COALESCE($2, notes), updated_at = NOW() WHERE id = $3 RETURNING *',
+            [status, notes, id]
+        );
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Database error' });
+    }
+});
+
 // ===================
 // CLIENTS ROUTES
 // ===================
