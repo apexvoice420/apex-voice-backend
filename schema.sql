@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS clients (
   vapi_phone TEXT,
   vapi_agent_id TEXT,
   status TEXT DEFAULT 'pending',
+  -- Stripe billing fields
+  stripe_customer_id TEXT,
+  setup_fee_paid BOOLEAN DEFAULT FALSE,
+  setup_fee_amount DECIMAL,
+  setup_paid_at TIMESTAMP,
+  monthly_retainer DECIMAL,
+  subscription_id TEXT,
+  subscription_status TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );

@@ -2030,6 +2030,125 @@ app.post('/api/emails/bulk', async (req, res) => {
 });
 
 // ===================
+// STRIPE ROUTES (Kevin's Treasury)
+// ===================
+
+const stripeService = require('./src/services/stripe');
+
+// Create Stripe customer for client
+app.post('/api/stripe/customers', async (req, res) => {
+    const { client_id, email, name } = req.body;
+    
+    if (!email || !name) {
+        return res.status(400).json({ error: 'email and name required' });
+    }
+    
+    const result = await stripeService.createCustomer(email, name, { client_id });
+    
+    if (result.success) {
+        // Update client with Stripe customer ID
+        await pool.query(
+            'UPDATE clients SET stripe_customer_id = $1 WHERE id = $2',
+            [result.customer.id, client_id]
+        );
+        res.json({ success: true, customer: result.customer });
+    } else {
+        res.status(500).json({ error: result.error });
+    }
+});
+
+// Create payment link for setup fee
+app.post('/api/stripe/payment-links', async (req, res) => {
+    const { client_id, amount, description } = req.body;
+    
+    if (!client_id || !amount) {
+        return res.status(400).json({ error: 'client_id and amount required' });
+    }
+    
+    const result = await stripeService.createSetupPaymentLink(client_id, amount, description || 'AI Receptionist Setup');
+    res.json(result);
+});
+
+// Create monthly subscription
+app.post('/api/stripe/subscriptions', async (req, res) => {
+    const { customer_id, amount, client_id } = req.body;
+    
+    if (!customer_id || !amount) {
+        return res.status(400).json({ error: 'customer_id and amount required' });
+    }
+    
+    // Create price first
+    const price = await stripeService.stripe.prices.create({
+        unit_amount: amount * 100,
+        currency: 'usd',
+        recurring: { interval: 'month' },
+        product_data: { name: 'Monthly AI Receptionist Retainer' }
+    });
+    
+    const result = await stripeService.createSubscription(customer_id, price.id, { client_id });
+    res.json(result);
+});
+
+// Get revenue stats (Kevin's dashboard)
+app.get('/api/stripe/stats', async (req, res) => {
+    const result = await stripeService.getRevenueStats();
+    res.json(result);
+});
+
+// Get client payments
+app.get('/api/stripe/payments/:customer_id', async (req, res) => {
+    const result = await stripeService.getClientPayments(req.params.customer_id);
+    res.json(result);
+});
+
+// Stripe webhook handler
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    
+    const result = stripeService.verifyWebhookSignature(req.body, sig, webhookSecret);
+    
+    if (!result.success) {
+        return res.status(400).json({ error: result.error });
+    }
+    
+    const event = result.event;
+    
+    // Handle different event types
+    switch (event.type) {
+        case 'checkout.session.completed':
+            const session = event.data.object;
+            const clientId = session.metadata?.client_id;
+            if (clientId) {
+                await pool.query(
+                    'UPDATE clients SET setup_paid = true, setup_paid_at = NOW() WHERE id = $1',
+                    [clientId]
+                );
+                console.log(`✅ Setup fee paid for client ${clientId}`);
+            }
+            break;
+            
+        case 'invoice.paid':
+            const invoice = event.data.object;
+            console.log(`✅ Invoice paid: ${invoice.id}`);
+            break;
+            
+        case 'invoice.payment_failed':
+            const failedInvoice = event.data.object;
+            console.log(`❌ Payment failed: ${failedInvoice.id}`);
+            // TODO: Notify Maurice, pause service
+            break;
+            
+        case 'customer.subscription.deleted':
+            const sub = event.data.object;
+            console.log(`⚠️ Subscription cancelled: ${sub.id}`);
+            break;
+    }
+    
+    res.json({ received: true });
+});
+
+// ===================
 // START SERVER
 // ===================
 
@@ -2040,3 +2159,4 @@ app.listen(PORT, async () => {
 });
 // Build fix Sat Feb 21 08:14:55 EST 2026
 // Force deploy 1771680875
+// Stripe integration added Feb 28, 2026
