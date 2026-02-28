@@ -384,7 +384,8 @@ app.post('/api/clients', async (req, res) => {
     const {
         businessName, industry, city, state,
         contactName, contactPhone, contactEmail, businessPhone,
-        escalationPhone, greeting, voiceStyle, services, faq
+        escalationPhone, greeting, voiceStyle, services, faq,
+        serviceTier, setupFee, monthlyFee
     } = req.body;
 
     if (!businessName || !contactEmail) {
@@ -392,20 +393,32 @@ app.post('/api/clients', async (req, res) => {
     }
 
     try {
+        // Generate portal token if tier allows self-service
+        const portalToken = serviceTier && serviceTier !== 'full-service' 
+            ? crypto.randomBytes(32).toString('hex') 
+            : null;
+
         const result = await pool.query(`
             INSERT INTO clients (
                 business_name, industry, city, state,
                 contact_name, contact_phone, contact_email, business_phone,
-                escalation_phone, greeting, voice_style, services, faq, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending')
+                escalation_phone, greeting, voice_style, services, faq, 
+                service_tier, setup_fee_amount, monthly_retainer, portal_access_token, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'pending')
             RETURNING *
         `, [
             businessName, industry, city, state,
             contactName, contactPhone, contactEmail, businessPhone,
-            escalationPhone, greeting, voiceStyle, services, faq
+            escalationPhone, greeting, voiceStyle, services, faq,
+            serviceTier || 'full-service', setupFee || 1500, monthlyFee || 500, portalToken
         ]);
 
         const client = result.rows[0];
+
+        // Generate portal URL if token exists
+        if (portalToken) {
+            client.portal_url = `https://crm.apexvoicesolutions.org/portal?token=${portalToken}`;
+        }
 
         // Try to create VAPI assistant (non-blocking)
         try {
@@ -2295,6 +2308,124 @@ app.post('/api/kevin/chat', async (req, res) => {
 
     res.json({ response });
 });
+
+// ===================
+// CLIENT PORTAL ROUTES
+// ===================
+
+const crypto = require('crypto');
+
+// Generate portal access token for a client
+app.post('/api/portal/generate-token/:clientId', async (req, res) => {
+    const { clientId } = req.params;
+    
+    try {
+        const token = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 year
+        
+        await pool.query(
+            'UPDATE clients SET portal_access_token = $1 WHERE id = $2',
+            [token, clientId]
+        );
+        
+        const portalUrl = `https://crm.apexvoicesolutions.org/portal?token=${token}`;
+        
+        res.json({ 
+            success: true, 
+            token,
+            portalUrl,
+            expiresAt 
+        });
+    } catch (error) {
+        console.error('Error generating portal token:', error);
+        res.status(500).json({ error: 'Failed to generate token' });
+    }
+});
+
+// Get client data for portal
+app.get('/api/portal/client', async (req, res) => {
+    const { token } = req.query;
+    
+    if (!token) {
+        return res.status(400).json({ error: 'Token required' });
+    }
+    
+    try {
+        const result = await pool.query(
+            'SELECT * FROM clients WHERE portal_access_token = $1',
+            [token]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Invalid token' });
+        }
+        
+        const client = result.rows[0];
+        
+        // Get call stats for this client
+        const statsResult = await pool.query(`
+            SELECT 
+                COUNT(*) as total_calls,
+                COALESCE(AVG(duration), 0)::int as avg_duration
+            FROM calls 
+            WHERE lead_id IN (SELECT id FROM leads WHERE phone = $1)
+        `, [client.business_phone]);
+        
+        const stats = {
+            totalCalls: parseInt(statsResult.rows[0]?.total_calls) || 0,
+            avgDuration: formatDuration(statsResult.rows[0]?.avg_duration || 0),
+            missedCalls: 0,
+            bookingsCreated: 0
+        };
+        
+        res.json({ client, stats });
+    } catch (error) {
+        console.error('Error fetching portal client:', error);
+        res.status(500).json({ error: 'Failed to fetch client' });
+    }
+});
+
+// Update client settings from portal
+app.post('/api/portal/update', async (req, res) => {
+    const { token, greeting, voiceStyle, services, faq, businessHours, escalationPhone } = req.body;
+    
+    if (!token) {
+        return res.status(400).json({ error: 'Token required' });
+    }
+    
+    try {
+        const result = await pool.query(`
+            UPDATE clients 
+            SET greeting = COALESCE($1, greeting),
+                voice_style = COALESCE($2, voice_style),
+                services = COALESCE($3, services),
+                faq = COALESCE($4, faq),
+                business_hours = COALESCE($5, business_hours),
+                escalation_phone = COALESCE($6, escalation_phone),
+                updated_at = NOW()
+            WHERE portal_access_token = $7
+            RETURNING *
+        `, [greeting, voiceStyle, services, faq, businessHours, escalationPhone, token]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Invalid token' });
+        }
+        
+        // TODO: Update VAPI assistant with new settings
+        
+        res.json({ success: true, client: result.rows[0] });
+    } catch (error) {
+        console.error('Error updating portal:', error);
+        res.status(500).json({ error: 'Failed to update' });
+    }
+});
+
+// Helper function to format duration
+function formatDuration(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
 
 // ===================
 // START SERVER

@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS clients (
   monthly_retainer DECIMAL,
   subscription_id TEXT,
   subscription_status TEXT,
+  -- Service tier
+  service_tier TEXT DEFAULT 'full-service', -- 'full-service', 'self-service', 'white-label', 'handoff'
+  setup_fee_amount DECIMAL DEFAULT 1500,
+  monthly_retainer DECIMAL DEFAULT 500,
+  business_hours TEXT DEFAULT '24/7',
+  portal_access_token TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
