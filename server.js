@@ -2149,6 +2149,118 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 });
 
 // ===================
+// KEVIN CFO ROUTES
+// ===================
+
+// Get aggregated financial data for Kevin's dashboard
+app.get('/api/kevin/financials', async (req, res) => {
+    try {
+        // Get Stripe revenue
+        const stripeResult = await stripeService.getRevenueStats();
+        const stripeData = stripeResult.success ? stripeResult : { available: 0, pending: 0, totalRevenue: 0 };
+
+        // Get VAPI usage (mock for now - would need VAPI API integration)
+        // TODO: Wire up actual VAPI usage tracking
+        const vapiData = {
+            totalMinutes: 0,
+            totalCost: 0,
+            callsCount: 0
+        };
+
+        // Get client stats
+        const clientStats = await pool.query(`
+            SELECT 
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE status = 'active') as active,
+                COUNT(*) FILTER (WHERE setup_fee_paid = false OR setup_fee_paid IS NULL) as pending_payment
+            FROM clients
+        `);
+
+        const clients = clientStats.rows[0] || { total: 0, active: 0, pending_payment: 0 };
+
+        // Calculate profit
+        const gross = (stripeData.totalRevenue || 0) - (vapiData.totalCost || 0);
+        const margin = stripeData.totalRevenue > 0 
+            ? Math.round((gross / stripeData.totalRevenue) * 100) 
+            : 0;
+
+        res.json({
+            stripe: stripeData,
+            vapi: vapiData,
+            clients: {
+                total: parseInt(clients.total) || 0,
+                active: parseInt(clients.active) || 0,
+                pendingPayment: parseInt(clients.pending_payment) || 0
+            },
+            profit: {
+                gross,
+                margin: margin.toString()
+            }
+        });
+    } catch (error) {
+        console.error('Kevin financials error:', error);
+        res.json({
+            stripe: { available: 0, pending: 0, totalRevenue: 0 },
+            vapi: { totalMinutes: 0, totalCost: 0, callsCount: 0 },
+            clients: { total: 0, active: 0, pendingPayment: 0 },
+            profit: { gross: 0, margin: '0' }
+        });
+    }
+});
+
+// Chat with Kevin (CFO assistant)
+app.post('/api/kevin/chat', async (req, res) => {
+    const { message, financials } = req.body;
+    
+    if (!message) {
+        return res.status(400).json({ error: 'Message required' });
+    }
+
+    const lowerMessage = message.toLowerCase();
+    
+    // Kevin's knowledge base - street-smart CFO responses
+    let response = '';
+    
+    if (lowerMessage.includes('how much') && (lowerMessage.includes('make') || lowerMessage.includes('revenue') || lowerMessage.includes('week') || lowerMessage.includes('month'))) {
+        const rev = financials?.stripe?.totalRevenue || 0;
+        response = rev > 0 
+            ? `You've pulled in $${rev.toLocaleString()} so far. ${rev < 1000 ? "But let's be real — that's not enough to scale. Time to close more deals." : "Solid. Keep that momentum going."}`
+            : "Zero revenue. You're in the red right now. The tech is ready — you need to get out there and close clients. Time to get that first check.";
+    }
+    else if (lowerMessage.includes('who') && lowerMessage.includes('paid')) {
+        const pending = financials?.clients?.pendingPayment || 0;
+        response = pending > 0 
+            ? `You got ${pending} client(s) waiting on payment. Send them the Stripe link and get that money secured.`
+            : "Everyone's paid up — or you got no clients yet. Either way, stack more wins.";
+    }
+    else if (lowerMessage.includes('vapi') || lowerMessage.includes('burn') || lowerMessage.includes('cost')) {
+        const cost = financials?.vapi?.totalCost || 0;
+        response = cost > 0 
+            ? `VAPI's burned $${cost.toFixed(2)} so far. That's your operating cost. Make sure your pricing covers this plus profit margin.`
+            : "No VAPI costs yet. Means you got no calls happening. Get clients active, then we'll track the burn rate.";
+    }
+    else if (lowerMessage.includes('profit') || lowerMessage.includes('margin')) {
+        const profit = financials?.profit?.gross || 0;
+        const margin = financials?.profit?.margin || '0';
+        response = profit >= 0 
+            ? `Gross profit: $${profit.toLocaleString()} with ${margin}% margin. ${parseInt(margin) < 50 ? "That margin is tight. Raise prices or cut costs." : "Healthy margins. Keep it up."}`
+            : `You're in the red by $${Math.abs(profit).toLocaleString()}. VAPI costs are eating your revenue. Time to close more deals or raise prices.`;
+    }
+    else if (lowerMessage.includes('client') && (lowerMessage.includes('profitable') || lowerMessage.includes('most'))) {
+        // TODO: Calculate per-client profitability
+        response = "I'll need to track calls per client to tell you who's most profitable. Right now, we don't have that data wired up. Want me to build that?";
+    }
+    else if (lowerMessage.includes('help') || lowerMessage.includes('what can you')) {
+        response = "I'm Kevin, your CFO. I track:\n\n• Revenue (Stripe)\n• Costs (VAPI usage)\n• Client payments\n• Profit margins\n\nAsk me anything about your numbers. I'll keep it real with you.";
+    }
+    else {
+        response = "I track the money — revenue, costs, clients, profit. Ask me something specific like 'How much we make?' or 'What's our burn rate?' and I'll break it down.";
+    }
+
+    res.json({ response });
+});
+
+// ===================
 // START SERVER
 // ===================
 
