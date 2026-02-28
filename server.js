@@ -317,6 +317,42 @@ app.patch('/leads/:id', async (req, res) => {
     }
 });
 
+// Delete single lead
+app.delete('/leads/:id', async (req, res) => {
+    try {
+        const result = await pool.query('DELETE FROM leads WHERE id = $1 RETURNING id', [req.params.id]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+        res.json({ success: true, message: 'Lead deleted' });
+    } catch (error) {
+        console.error('Error deleting lead:', error);
+        res.status(500).json({ error: 'Failed to delete lead' });
+    }
+});
+
+// Delete all leads (fresh start)
+app.delete('/leads/all', async (req, res) => {
+    try {
+        const result = await pool.query('DELETE FROM leads RETURNING id');
+        res.json({ success: true, message: `Deleted ${result.rows.length} leads` });
+    } catch (error) {
+        console.error('Error deleting all leads:', error);
+        res.status(500).json({ error: 'Failed to delete leads' });
+    }
+});
+
+// Delete all clients (fresh start)
+app.delete('/api/clients/all', async (req, res) => {
+    try {
+        const result = await pool.query('DELETE FROM clients RETURNING id');
+        res.json({ success: true, message: `Deleted ${result.rows.length} clients` });
+    } catch (error) {
+        console.error('Error deleting all clients:', error);
+        res.status(500).json({ error: 'Failed to delete clients' });
+    }
+});
+
 // ===================
 // CLIENTS ROUTES
 // ===================
