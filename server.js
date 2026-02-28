@@ -2428,6 +2428,208 @@ function formatDuration(seconds) {
 }
 
 // ===================
+// LEAD ENRICHMENT (Apollo.io)
+// ===================
+
+const apolloService = require('./src/services/apollo');
+
+// Enrich single lead
+app.post('/api/leads/:id/enrich', async (req, res) => {
+    const { id } = req.params;
+    
+    try {
+        // Get the lead
+        const leadResult = await pool.query('SELECT * FROM leads WHERE id = $1', [id]);
+        if (leadResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+        
+        const lead = leadResult.rows[0];
+        
+        // Skip if already has email
+        if (lead.email && lead.phone) {
+            return res.json({ 
+                success: true, 
+                message: 'Lead already enriched',
+                lead 
+            });
+        }
+        
+        // Search Apollo for matching business
+        let enrichedData = {};
+        
+        // Try to find by business name + location
+        if (lead.business_name && (lead.city || lead.state)) {
+            const searchResult = await apolloService.searchPeople({
+                q_organization_name: lead.business_name,
+                person_locations: [`${lead.city || ''}, ${lead.state || ''}`.trim()].filter(Boolean),
+                perPage: 5
+            });
+            
+            if (searchResult.people && searchResult.people.length > 0) {
+                const person = searchResult.people[0];
+                enrichedData = {
+                    email: person.email || lead.email,
+                    phone: person.phone_numbers?.[0]?.raw_number || person.sanitized_phone || lead.phone,
+                    website: person.organization?.website_url || lead.website,
+                    industry: person.organization?.industry || lead.industry,
+                    linkedin: person.linkedin_url || null
+                };
+            }
+        }
+        
+        // Try to find by phone number if no results yet
+        if (!enrichedData.email && lead.phone) {
+            // Apollo doesn't have reverse phone lookup, but we can try organization search
+            // For now, just keep existing data
+        }
+        
+        // Update lead with enriched data
+        if (enrichedData.email || enrichedData.phone) {
+            const updateResult = await pool.query(`
+                UPDATE leads 
+                SET email = COALESCE($1, email),
+                    phone = COALESCE($2, phone),
+                    website = COALESCE($3, website),
+                    industry = COALESCE($4, industry),
+                    updated_at = NOW()
+                WHERE id = $5
+                RETURNING *
+            `, [enrichedData.email, enrichedData.phone, enrichedData.website, enrichedData.industry, id]);
+            
+            res.json({ 
+                success: true, 
+                message: 'Lead enriched',
+                enriched: enrichedData,
+                lead: updateResult.rows[0]
+            });
+        } else {
+            res.json({ 
+                success: false, 
+                message: 'No enrichment data found',
+                lead 
+            });
+        }
+    } catch (error) {
+        console.error('Error enriching lead:', error);
+        res.status(500).json({ error: 'Failed to enrich lead' });
+    }
+});
+
+// Bulk enrich leads
+app.post('/api/leads/enrich/bulk', async (req, res) => {
+    const { leadIds } = req.body;
+    
+    if (!leadIds || !Array.isArray(leadIds)) {
+        return res.status(400).json({ error: 'leadIds array required' });
+    }
+    
+    const results = {
+        total: leadIds.length,
+        enriched: 0,
+        skipped: 0,
+        failed: 0,
+        leads: []
+    };
+    
+    for (const id of leadIds) {
+        try {
+            // Get the lead
+            const leadResult = await pool.query('SELECT * FROM leads WHERE id = $1', [id]);
+            if (leadResult.rows.length === 0) {
+                results.failed++;
+                continue;
+            }
+            
+            const lead = leadResult.rows[0];
+            
+            // Skip if already has email and phone
+            if (lead.email && lead.phone) {
+                results.skipped++;
+                results.leads.push({ id, status: 'skipped', reason: 'Already enriched' });
+                continue;
+            }
+            
+            // Search Apollo
+            let enrichedData = {};
+            
+            if (lead.business_name) {
+                const searchResult = await apolloService.searchPeople({
+                    q_organization_name: lead.business_name,
+                    person_locations: lead.city ? [`${lead.city}, ${lead.state || ''}`] : [],
+                    perPage: 3
+                });
+                
+                if (searchResult.people && searchResult.people.length > 0) {
+                    const person = searchResult.people[0];
+                    enrichedData = {
+                        email: person.email || null,
+                        phone: person.phone_numbers?.[0]?.raw_number || person.sanitized_phone || null
+                    };
+                }
+            }
+            
+            // Update if found
+            if (enrichedData.email || enrichedData.phone) {
+                await pool.query(`
+                    UPDATE leads 
+                    SET email = COALESCE($1, email),
+                        phone = COALESCE($2, phone),
+                        updated_at = NOW()
+                    WHERE id = $3
+                `, [enrichedData.email, enrichedData.phone, id]);
+                
+                results.enriched++;
+                results.leads.push({ id, status: 'enriched', data: enrichedData });
+            } else {
+                results.failed++;
+                results.leads.push({ id, status: 'failed', reason: 'No match found' });
+            }
+            
+            // Rate limit: wait 200ms between requests
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+        } catch (err) {
+            results.failed++;
+            results.leads.push({ id, status: 'error', error: err.message });
+        }
+    }
+    
+    res.json(results);
+});
+
+// Enrich all leads missing email
+app.post('/api/leads/enrich/all', async (req, res) => {
+    try {
+        // Get leads without email
+        const result = await pool.query(`
+            SELECT id FROM leads 
+            WHERE email IS NULL OR email = ''
+            LIMIT 100
+        `);
+        
+        if (result.rows.length === 0) {
+            return res.json({ 
+                success: true, 
+                message: 'No leads need enrichment' 
+            });
+        }
+        
+        const leadIds = result.rows.map(r => r.id);
+        
+        // Trigger bulk enrichment
+        res.json({ 
+            success: true, 
+            message: `Starting enrichment for ${leadIds.length} leads`,
+            leadIds,
+            note: 'Use POST /api/leads/enrich/bulk to process'
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ===================
 // START SERVER
 // ===================
 
