@@ -191,8 +191,7 @@ app.post('/leads', async (req, res) => {
                     city = COALESCE(EXCLUDED.city, leads.city),
                     state = COALESCE(EXCLUDED.state, leads.state),
                     industry = COALESCE(EXCLUDED.industry, leads.industry),
-                    website = COALESCE(EXCLUDED.website, leads.website),
-                    updated_at = NOW()
+                    website = COALESCE(EXCLUDED.website, leads.website)
                 RETURNING *
             `, [
                 singleLead.business_name,
@@ -211,7 +210,7 @@ app.post('/leads', async (req, res) => {
             return res.status(201).json({ success: true, lead: result.rows[0] });
         } catch (e) {
             console.error('Error saving lead:', e);
-            return res.status(500).json({ error: 'Failed to save lead' });
+            return res.status(500).json({ error: 'Failed to save lead', details: e.message });
         }
     }
     
