@@ -170,8 +170,55 @@ app.get('/leads/:id', async (req, res) => {
 });
 
 app.post('/leads', async (req, res) => {
-    const { leads } = req.body;
-    if (!leads || !Array.isArray(leads)) return res.status(400).json({ error: 'Invalid data' });
+    const { leads, ...singleLead } = req.body;
+    
+    // Handle single lead creation
+    if (!leads && singleLead.business_name) {
+        try {
+            const formattedPhone = singleLead.phone ? singleLead.phone.replace(/\D/g, '').slice(-10) : null;
+            if (!formattedPhone) {
+                return res.status(400).json({ error: 'Valid phone number required' });
+            }
+            
+            const result = await pool.query(`
+                INSERT INTO leads (
+                    business_name, phone, email, city, state, industry, 
+                    rating, reviews, website, notes, status
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (phone) DO UPDATE SET
+                    email = COALESCE(EXCLUDED.email, leads.email),
+                    city = COALESCE(EXCLUDED.city, leads.city),
+                    state = COALESCE(EXCLUDED.state, leads.state),
+                    industry = COALESCE(EXCLUDED.industry, leads.industry),
+                    website = COALESCE(EXCLUDED.website, leads.website),
+                    updated_at = NOW()
+                RETURNING *
+            `, [
+                singleLead.business_name,
+                formattedPhone,
+                singleLead.email || null,
+                singleLead.city || null,
+                singleLead.state || null,
+                singleLead.industry || null,
+                singleLead.rating || null,
+                singleLead.reviews || null,
+                singleLead.website || null,
+                singleLead.notes || null,
+                singleLead.status || 'New Lead'
+            ]);
+            
+            return res.status(201).json({ success: true, lead: result.rows[0] });
+        } catch (e) {
+            console.error('Error saving lead:', e);
+            return res.status(500).json({ error: 'Failed to save lead' });
+        }
+    }
+    
+    // Handle array of leads (bulk upload)
+    if (!leads || !Array.isArray(leads)) {
+        return res.status(400).json({ error: 'Invalid data' });
+    }
 
     let savedCount = 0;
     for (const lead of leads) {
