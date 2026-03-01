@@ -183,9 +183,9 @@ app.post('/leads', async (req, res) => {
             const result = await pool.query(`
                 INSERT INTO leads (
                     business_name, phone, email, city, state, industry, 
-                    rating, reviews, website, notes, status
+                    rating, reviews, website, status
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 ON CONFLICT (phone) DO UPDATE SET
                     email = COALESCE(EXCLUDED.email, leads.email),
                     city = COALESCE(EXCLUDED.city, leads.city),
@@ -203,7 +203,6 @@ app.post('/leads', async (req, res) => {
                 singleLead.rating || null,
                 singleLead.reviews || null,
                 singleLead.website || null,
-                singleLead.notes || null,
                 singleLead.status || 'New Lead'
             ]);
             
