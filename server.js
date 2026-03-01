@@ -504,7 +504,9 @@ app.post('/api/clients', async (req, res) => {
         res.status(201).json({ client });
     } catch (error) {
         console.error('Error creating client:', error);
-        res.status(500).json({ error: 'Failed to create client' });
+        console.error('Error details:', error.message);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ error: 'Failed to create client', details: error.message, code: error.code });
     }
 });
 
@@ -1338,10 +1340,30 @@ const initDatabase = async () => {
                 vapi_phone TEXT,
                 vapi_agent_id TEXT,
                 status TEXT DEFAULT 'pending',
+                service_tier TEXT DEFAULT 'full-service',
+                setup_fee_amount DECIMAL DEFAULT 1500,
+                monthly_retainer DECIMAL DEFAULT 500,
+                portal_access_token TEXT,
+                stripe_customer_id TEXT,
+                setup_fee_paid BOOLEAN DEFAULT FALSE,
+                subscription_id TEXT,
+                subscription_status TEXT,
+                business_hours TEXT DEFAULT '24/7',
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW()
             );
         `);
+
+        // Add missing columns to clients table if they don't exist (for existing databases)
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS service_tier TEXT DEFAULT 'full-service'`);
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS setup_fee_amount DECIMAL DEFAULT 1500`);
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS monthly_retainer DECIMAL DEFAULT 500`);
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS portal_access_token TEXT`);
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`);
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS setup_fee_paid BOOLEAN DEFAULT FALSE`);
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS subscription_id TEXT`);
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS subscription_status TEXT`);
+        await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS business_hours TEXT DEFAULT '24/7'`);
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS leads (
