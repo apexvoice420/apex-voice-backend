@@ -46,12 +46,12 @@ app.get('/', (req, res) => {
     res.json({ 
         status: 'ok', 
         message: 'Apex Voice Solutions API 🚀',
-        version: '2.6.0',
+        version: '2.7.0',
         endpoints: {
             auth: ['/api/auth/login', '/api/auth/register'],
             leads: ['/leads', '/leads/:id', 'POST /api/leads/upload-csv'],
             clients: ['/api/clients'],
-            scrape: ['POST /scrape'],
+            scrape: ['POST /api/scraper/scrape'],
             stats: ['/api/stats']
         }
     });
