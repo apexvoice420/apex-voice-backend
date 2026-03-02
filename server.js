@@ -1595,7 +1595,7 @@ app.post('/api/migrate', async (req, res) => {
 // ===================
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const FROM_EMAIL = process.env.FROM_EMAIL || 'maurice.pinnock@apexvoicesolutions.com';
+const FROM_EMAIL = process.env.FROM_EMAIL || 'maurice@apexvoicestudio.com';
 const TEST_FROM_EMAIL = 'onboarding@resend.dev'; // Resend's test domain (works without verification)
 
 async function sendEmail({ to, subject, html, text, useTestDomain = false }) {
@@ -2037,8 +2037,8 @@ app.post('/api/emails/send', async (req, res) => {
         return res.status(400).json({ error: 'to, subject, and body are required' });
     }
 
-    const resendApiKey = process.env.RESEND_API_KEY || 're_45QaJbgY_HMCUkXaGR7eLcdCUqh3Y8CZN';
-    // Use verified domain or resend.dev for testing
+    const resendApiKey = process.env.RESEND_API_KEY || 're_HaPE2CB6_LhrU8TBUV9sopDKfZYyFB2yn';
+    // Use resend.dev for testing (works with any recipient)
     const senderEmail = from || 'onboarding@resend.dev';
 
     try {
@@ -2117,7 +2117,8 @@ app.post('/api/emails/bulk', async (req, res) => {
     }
 
     const resendApiKey = process.env.RESEND_API_KEY || 're_HaPE2CB6_LhrU8TBUV9sopDKfZYyFB2yn';
-    const senderEmail = 'maurice.pinnock@apexvoicesolutions.com';
+    // Use resend.dev for testing (works with any recipient)
+    const senderEmail = 'onboarding@resend.dev';
     const results = [];
 
     for (const email of emails) {
