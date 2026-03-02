@@ -37,6 +37,21 @@ const pdfUpload = multer({
     }
 });
 
+// Add missing columns to database
+router.post('/migrate', async (req, res) => {
+    const db = req.app.locals.db;
+    
+    try {
+        // Add pdf_path column if it doesn't exist
+        await db.query(`ALTER TABLE linkedin_posts ADD COLUMN IF NOT EXISTS pdf_path TEXT`);
+        
+        res.json({ success: true, message: 'Migration complete' });
+    } catch (error) {
+        console.error('Migration error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Check if LinkedIn is configured
 router.get('/status', async (req, res) => {
     const configured = linkedin.isConfigured();
