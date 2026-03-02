@@ -1480,6 +1480,7 @@ const initDatabase = async () => {
                 id SERIAL PRIMARY KEY,
                 content TEXT NOT NULL,
                 image_url TEXT,
+                pdf_path TEXT,
                 scheduled_for TIMESTAMP NOT NULL,
                 timezone TEXT DEFAULT 'America/New_York',
                 status TEXT DEFAULT 'scheduled',

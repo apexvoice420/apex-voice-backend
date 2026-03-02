@@ -157,6 +157,63 @@ async function postText(content) {
 }
 
 /**
+ * Post text with PDF document to LinkedIn (creates carousel)
+ */
+async function postWithPdf(content, pdfPath) {
+    try {
+        const { page } = await initBrowser();
+
+        console.log('📄 Posting PDF carousel to LinkedIn...');
+        
+        // Navigate to feed
+        await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle2' });
+        await randomDelay(2000, 3000);
+
+        // Click "Start a post" button
+        const postButton = await page.waitForSelector('button.share-box-trigger, [data-control-name="actor.pencil"]', { timeout: 10000 });
+        await postButton.click();
+        await randomDelay(1000, 2000);
+
+        // Click "Add a document" button
+        const docButton = await page.waitForSelector('[data-control-name="upload_document"], button[aria-label="Add a document"]', { timeout: 10000 });
+        await docButton.click();
+        await randomDelay(1000, 2000);
+
+        // Upload the PDF
+        const fileInput = await page.waitForSelector('input[type="file"]', { timeout: 10000 });
+        await fileInput.uploadFile(pdfPath);
+
+        // Wait for document to upload and process
+        await randomDelay(5000, 8000);
+
+        // Type the content
+        const editor = await page.$('[data-test-editor-container], .ql-editor, [contenteditable="true"]');
+        if (editor) {
+            await editor.click();
+            await randomDelay(500, 1000);
+            await page.keyboard.type(content, { delay: 10 });
+        }
+
+        await randomDelay(1000, 2000);
+
+        // Click post button
+        const submitButton = await page.waitForSelector('button.share-actions__primary-action', { timeout: 10000 });
+        await submitButton.click();
+
+        // Wait for post to be published
+        await randomDelay(5000, 8000);
+
+        console.log('✅ PDF carousel post published successfully');
+        
+        return { success: true, message: 'PDF carousel published to LinkedIn' };
+
+    } catch (error) {
+        console.error('❌ LinkedIn PDF post error:', error.message);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
  * Post text with image to LinkedIn
  */
 async function postWithImage(content, imagePath) {
@@ -256,6 +313,7 @@ module.exports = {
     initBrowser,
     postText,
     postWithImage,
+    postWithPdf,
     closeBrowser,
     isConfigured,
     getProfileInfo,

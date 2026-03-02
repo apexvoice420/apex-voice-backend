@@ -6,6 +6,36 @@
 const express = require('express');
 const router = express.Router();
 const linkedin = require('../services/linkedin');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Configure multer for PDF uploads
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadDir = '/tmp/linkedin-uploads';
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'pdf-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const pdfUpload = multer({
+    storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'application/pdf' || file.originalname.endsWith('.pdf')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only PDF files are allowed'), false);
+        }
+    }
+});
 
 // Check if LinkedIn is configured
 router.get('/status', async (req, res) => {
@@ -47,7 +77,7 @@ router.get('/posts', async (req, res) => {
 // Schedule a new post
 router.post('/posts', async (req, res) => {
     const db = req.app.locals.db;
-    const { content, imageUrl, scheduledFor, timezone = 'America/New_York' } = req.body;
+    const { content, imageUrl, pdfPath, scheduledFor, timezone = 'America/New_York' } = req.body;
 
     if (!content) {
         return res.status(400).json({ error: 'Content is required' });
@@ -67,10 +97,10 @@ router.post('/posts', async (req, res) => {
 
     try {
         const result = await db.query(`
-            INSERT INTO linkedin_posts (content, image_url, scheduled_for, timezone, status)
-            VALUES ($1, $2, $3, $4, 'scheduled')
+            INSERT INTO linkedin_posts (content, image_url, pdf_path, scheduled_for, timezone, status)
+            VALUES ($1, $2, $3, $4, $5, 'scheduled')
             RETURNING *
-        `, [content, imageUrl || null, scheduledTime, timezone]);
+        `, [content, imageUrl || null, pdfPath || null, scheduledTime, timezone]);
 
         res.status(201).json({ 
             success: true, 
@@ -81,6 +111,20 @@ router.post('/posts', async (req, res) => {
         console.error('Error scheduling LinkedIn post:', error);
         res.status(500).json({ error: 'Failed to schedule post' });
     }
+});
+
+// Upload PDF for LinkedIn post
+router.post('/upload-pdf', pdfUpload.single('pdf'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    res.json({
+        success: true,
+        pdfPath: req.file.path,
+        originalName: req.file.originalname,
+        size: req.file.size
+    });
 });
 
 // Update a scheduled post
@@ -165,7 +209,9 @@ router.post('/posts/:id/publish', async (req, res) => {
 
         // Publish to LinkedIn
         let result;
-        if (post.image_url) {
+        if (post.pdf_path) {
+            result = await linkedin.postWithPdf(post.content, post.pdf_path);
+        } else if (post.image_url) {
             result = await linkedin.postWithImage(post.content, post.image_url);
         } else {
             result = await linkedin.postText(post.content);
@@ -259,7 +305,9 @@ router.post('/process-queue', async (req, res) => {
 
             // Publish
             let publishResult;
-            if (post.image_url) {
+            if (post.pdf_path) {
+                publishResult = await linkedin.postWithPdf(post.content, post.pdf_path);
+            } else if (post.image_url) {
                 publishResult = await linkedin.postWithImage(post.content, post.image_url);
             } else {
                 publishResult = await linkedin.postText(post.content);
