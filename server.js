@@ -145,6 +145,10 @@ app.get('/api/auth/me', async (req, res) => {
 const leadsRoutes = require('./src/routes/leads');
 app.use('/api/leads', leadsRoutes);
 
+// LinkedIn routes
+const linkedinRoutes = require('./src/routes/linkedin');
+app.use('/api/linkedin', linkedinRoutes);
+
 // Legacy routes for backwards compatibility
 app.get('/leads', async (req, res) => {
     try {
@@ -1470,6 +1474,22 @@ const initDatabase = async () => {
             );
         `);
 
+        // LinkedIn posts for automated posting
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS linkedin_posts (
+                id SERIAL PRIMARY KEY,
+                content TEXT NOT NULL,
+                image_url TEXT,
+                scheduled_for TIMESTAMP NOT NULL,
+                timezone TEXT DEFAULT 'America/New_York',
+                status TEXT DEFAULT 'scheduled',
+                published_at TIMESTAMP,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );
+        `);
+
         console.log('✅ Database tables initialized');
     } catch (error) {
         console.error('Database init error:', error.message);
@@ -2017,8 +2037,9 @@ app.post('/api/emails/send', async (req, res) => {
         return res.status(400).json({ error: 'to, subject, and body are required' });
     }
 
-    const resendApiKey = process.env.RESEND_API_KEY || 're_HaPE2CB6_LhrU8TBUV9sopDKfZYyFB2yn';
-    const senderEmail = from || 'maurice.pinnock@apexvoicesolutions.com';
+    const resendApiKey = process.env.RESEND_API_KEY || 're_45QaJbgY_HMCUkXaGR7eLcdCUqh3Y8CZN';
+    // Use verified domain or resend.dev for testing
+    const senderEmail = from || 'onboarding@resend.dev';
 
     try {
         const response = await fetch('https://api.resend.com/emails', {

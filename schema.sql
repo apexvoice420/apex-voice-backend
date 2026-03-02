@@ -158,3 +158,17 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
   executed_at TIMESTAMP,
   result JSONB
 );
+
+-- LinkedIn posts for automated posting
+CREATE TABLE IF NOT EXISTS linkedin_posts (
+  id SERIAL PRIMARY KEY,
+  content TEXT NOT NULL,
+  image_url TEXT,
+  scheduled_for TIMESTAMP NOT NULL,
+  timezone TEXT DEFAULT 'America/New_York',
+  status TEXT DEFAULT 'scheduled', -- 'scheduled', 'publishing', 'published', 'failed'
+  published_at TIMESTAMP,
+  error_message TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
