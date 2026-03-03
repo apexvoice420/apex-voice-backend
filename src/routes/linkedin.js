@@ -171,7 +171,7 @@ router.put('/posts/:id', async (req, res) => {
     }
 });
 
-// Delete a scheduled post
+// Delete a post (scheduled or failed)
 router.delete('/posts/:id', async (req, res) => {
     const db = req.app.locals.db;
     const { id } = req.params;
@@ -179,7 +179,7 @@ router.delete('/posts/:id', async (req, res) => {
     try {
         const result = await db.query(`
             DELETE FROM linkedin_posts 
-            WHERE id = $1 AND status = 'scheduled'
+            WHERE id = $1 AND status IN ('scheduled', 'failed')
             RETURNING id
         `, [id]);
 
