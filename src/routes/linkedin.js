@@ -359,6 +359,19 @@ router.post('/process-queue', async (req, res) => {
     }
 });
 
+// Delete all posts (admin)
+router.delete('/posts-all', async (req, res) => {
+    const db = req.app.locals.db;
+
+    try {
+        const result = await db.query(`DELETE FROM linkedin_posts RETURNING id`);
+        res.json({ success: true, deleted: result.rows.length });
+    } catch (error) {
+        console.error('Error deleting all LinkedIn posts:', error);
+        res.status(500).json({ error: 'Failed to delete posts' });
+    }
+});
+
 // Close browser session
 router.post('/disconnect', async (req, res) => {
     await linkedin.closeBrowser();
