@@ -7,31 +7,40 @@ const fetch = require('node-fetch');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'maurice.pinnock@apexvoicesolutions.com';
+const REPLY_TO_EMAIL = process.env.AGENTMAIL_INBOX || 'apexvoicesolutions@agentmail.to';
 const TEST_FROM_EMAIL = 'onboarding@resend.dev'; // Resend's test domain
 
 /**
  * Send email via Resend API
+ * Reply-To is set to AgentMail inbox for reply tracking
  */
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, skipReplyTo = false }) {
     if (!RESEND_API_KEY) {
         console.log('Resend not configured, skipping email');
         return { success: false, error: 'Resend not configured' };
     }
 
     try {
+        const emailPayload = {
+            from: FROM_EMAIL,
+            to: Array.isArray(to) ? to : [to],
+            subject,
+            html,
+            text: text || html.replace(/<[^>]*>/g, '')
+        };
+        
+        // Add Reply-To for AgentMail reply tracking (skip for test emails)
+        if (!skipReplyTo) {
+            emailPayload.reply_to = REPLY_TO_EMAIL;
+        }
+
         const response = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${RESEND_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                from: FROM_EMAIL,
-                to: Array.isArray(to) ? to : [to],
-                subject,
-                html,
-                text: text || html.replace(/<[^>]*>/g, '')
-            })
+            body: JSON.stringify(emailPayload)
         });
 
         const result = await response.json();
