@@ -76,10 +76,10 @@ async function sendReply({ to, subject, text, html, replyToMessageId }) {
     };
     
     if (replyToMessageId) {
-        body.reply_to_message_id = replyToMessageId;
+        body.reply_to = replyToMessageId;
     }
     
-    const response = await fetch(`${AGENTMAIL_BASE_URL}/inboxes/${INBOX_ID}/messages`, {
+    const response = await fetch(`${AGENTMAIL_BASE_URL}/inboxes/${INBOX_ID}/messages/send`, {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${AGENTMAIL_API_KEY}`,
