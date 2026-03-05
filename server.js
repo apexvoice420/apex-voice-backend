@@ -2724,6 +2724,346 @@ app.post('/api/leads/enrich/all', async (req, res) => {
 });
 
 // ===================
+// AGENTMAIL WEBHOOK - Incoming Email Handler
+// ===================
+
+// AgentMail webhook receives incoming emails
+app.post('/webhooks/agentmail', async (req, res) => {
+    console.log('📧 AgentMail webhook received');
+    
+    try {
+        const { parseWebhookPayload, detectIntent, extractEmailAddress, extractSenderName } = require('./src/services/agentmail');
+        const { generateSuggestedReply, shouldAutoReply } = require('./src/services/ai-reply');
+        
+        // Parse the incoming email
+        const emailData = parseWebhookPayload(req.body);
+        console.log(`From: ${emailData.from}`);
+        console.log(`Subject: ${emailData.subject}`);
+        
+        // Detect intent
+        const intent = detectIntent(emailData.subject, emailData.body);
+        console.log(`Detected intent: ${intent}`);
+        
+        // Extract sender email
+        const senderEmail = extractEmailAddress(emailData.from);
+        const senderName = extractSenderName(emailData.from);
+        
+        // Find or create lead by email
+        let leadResult = await pool.query('SELECT * FROM leads WHERE email = $1', [senderEmail]);
+        let lead = leadResult.rows[0];
+        
+        if (!lead) {
+            // Create new lead from incoming email
+            const newLead = await pool.query(`
+                INSERT INTO leads (business_name, email, status, source, notes)
+                VALUES ($1, $2, 'Email Reply', 'inbound_email', $3)
+                RETURNING *
+            `, [senderName, senderEmail, `Initial contact via email: ${emailData.subject}`]);
+            lead = newLead.rows[0];
+            console.log(`Created new lead: ${lead.id}`);
+        }
+        
+        // Generate AI suggested reply
+        const aiResult = await generateSuggestedReply(
+            { ...emailData, intent, from: emailData.from },
+            lead
+        );
+        
+        // Save incoming email to database
+        const emailResult = await pool.query(`
+            INSERT INTO emails (
+                lead_id, direction, from_email, to_email, subject, body, body_html,
+                message_id, in_reply_to, thread_id, status, ai_suggested_reply, 
+                ai_reply_generated_at, raw_data
+            ) VALUES ($1, 'inbound', $2, $3, $4, $5, $6, $7, $8, $9, 'received', $10, NOW(), $11)
+            RETURNING *
+        `, [
+            lead.id,
+            emailData.from,
+            emailData.to,
+            emailData.subject,
+            emailData.body,
+            emailData.bodyHtml,
+            emailData.messageId,
+            emailData.inReplyTo,
+            emailData.threadId,
+            aiResult.suggestedReply,
+            JSON.stringify(emailData.raw)
+        ]);
+        
+        const savedEmail = emailResult.rows[0];
+        console.log(`Saved email ID: ${savedEmail.id}`);
+        
+        // Check if we should auto-reply
+        const shouldAuto = shouldAutoReply(intent, aiResult.confidence || 0.8);
+        
+        if (shouldAuto && aiResult.suggestedReply) {
+            console.log('🤖 Sending auto-reply...');
+            
+            // Send auto-reply via Resend
+            const sendResult = await sendEmail({
+                to: senderEmail,
+                subject: `Re: ${emailData.subject}`,
+                text: aiResult.suggestedReply,
+                html: aiResult.suggestedReply.replace(/\n/g, '<br>')
+            });
+            
+            if (sendResult.success) {
+                // Save outbound email
+                await pool.query(`
+                    INSERT INTO emails (
+                        lead_id, direction, from_email, to_email, subject, body,
+                        in_reply_to, status, auto_reply_sent, auto_reply_rule
+                    ) VALUES ($1, 'outbound', $2, $3, $4, $5, $6, 'sent', true, $7)
+                `, [
+                    lead.id,
+                    FROM_EMAIL,
+                    senderEmail,
+                    `Re: ${emailData.subject}`,
+                    aiResult.suggestedReply,
+                    emailData.messageId,
+                    intent
+                ]);
+                
+                // Update lead status
+                await pool.query(
+                    'UPDATE leads SET status = $1, updated_at = NOW() WHERE id = $2',
+                    ['Auto-Replied', lead.id]
+                );
+                
+                console.log(`✅ Auto-reply sent to ${senderEmail}`);
+            }
+        }
+        
+        res.json({ 
+            received: true, 
+            email_id: savedEmail.id,
+            lead_id: lead.id,
+            intent,
+            auto_replied: shouldAuto && aiResult.suggestedReply ? true : false,
+            suggested_reply: aiResult.suggestedReply
+        });
+        
+    } catch (error) {
+        console.error('AgentMail webhook error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get emails for a lead
+app.get('/api/emails/lead/:leadId', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT * FROM emails 
+            WHERE lead_id = $1 
+            ORDER BY created_at DESC
+        `, [req.params.leadId]);
+        res.json({ emails: result.rows });
+    } catch (error) {
+        console.error('Error fetching emails:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get all emails (inbox view)
+app.get('/api/emails/inbox', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT e.*, l.business_name 
+            FROM emails e
+            LEFT JOIN leads l ON e.lead_id = l.id
+            WHERE e.direction = 'inbound'
+            ORDER BY e.created_at DESC
+            LIMIT 100
+        `);
+        res.json({ emails: result.rows });
+    } catch (error) {
+        console.error('Error fetching inbox:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get emails with AI suggestions
+app.get('/api/emails/suggestions', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT e.*, l.business_name, l.status as lead_status
+            FROM emails e
+            LEFT JOIN leads l ON e.lead_id = l.id
+            WHERE e.direction = 'inbound' 
+              AND e.ai_suggested_reply IS NOT NULL
+              AND e.auto_reply_sent = false
+            ORDER BY e.created_at DESC
+            LIMIT 50
+        `);
+        res.json({ emails: result.rows });
+    } catch (error) {
+        console.error('Error fetching suggestions:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Send manual reply to an email
+app.post('/api/emails/:id/reply', async (req, res) => {
+    const { id } = req.params;
+    const { body } = req.body;
+    
+    if (!body) {
+        return res.status(400).json({ error: 'Reply body required' });
+    }
+    
+    try {
+        // Get original email
+        const emailResult = await pool.query('SELECT * FROM emails WHERE id = $1', [id]);
+        const originalEmail = emailResult.rows[0];
+        
+        if (!originalEmail) {
+            return res.status(404).json({ error: 'Email not found' });
+        }
+        
+        // Send reply
+        const sendResult = await sendEmail({
+            to: originalEmail.from_email,
+            subject: `Re: ${originalEmail.subject}`,
+            text: body,
+            html: body.replace(/\n/g, '<br>')
+        });
+        
+        if (sendResult.success) {
+            // Save outbound email
+            await pool.query(`
+                INSERT INTO emails (
+                    lead_id, direction, from_email, to_email, subject, body,
+                    in_reply_to, status
+                ) VALUES ($1, 'outbound', $2, $3, $4, $5, $6, $7, 'sent')
+            `, [
+                originalEmail.lead_id,
+                FROM_EMAIL,
+                originalEmail.from_email,
+                `Re: ${originalEmail.subject}`,
+                body,
+                originalEmail.message_id
+            ]);
+            
+            // Update lead status
+            if (originalEmail.lead_id) {
+                await pool.query(
+                    'UPDATE leads SET status = $1, updated_at = NOW() WHERE id = $2',
+                    ['Replied', originalEmail.lead_id]
+                );
+            }
+        }
+        
+        res.json({ success: sendResult.success, id: sendResult.id });
+        
+    } catch (error) {
+        console.error('Reply error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Regenerate AI suggestion for an email
+app.post('/api/emails/:id/regenerate-suggestion', async (req, res) => {
+    const { id } = req.params;
+    
+    try {
+        const emailResult = await pool.query('SELECT * FROM emails WHERE id = $1', [id]);
+        const email = emailResult.rows[0];
+        
+        if (!email) {
+            return res.status(404).json({ error: 'Email not found' });
+        }
+        
+        const { generateSuggestedReply } = require('./src/services/ai-reply');
+        const { detectIntent } = require('./src/services/agentmail');
+        
+        // Get lead context
+        const leadResult = await pool.query('SELECT * FROM leads WHERE id = $1', [email.lead_id]);
+        const lead = leadResult.rows[0];
+        
+        // Detect intent and regenerate
+        const intent = detectIntent(email.subject, email.body);
+        const aiResult = await generateSuggestedReply(
+            { from: email.from_email, subject: email.subject, body: email.body, intent },
+            lead
+        );
+        
+        // Update email with new suggestion
+        await pool.query(`
+            UPDATE emails 
+            SET ai_suggested_reply = $1, ai_reply_generated_at = NOW()
+            WHERE id = $2
+        `, [aiResult.suggestedReply, id]);
+        
+        res.json({ 
+            success: true, 
+            suggested_reply: aiResult.suggestedReply,
+            confidence: aiResult.confidence
+        });
+        
+    } catch (error) {
+        console.error('Regenerate error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get auto-reply rules
+app.get('/api/emails/auto-reply-rules', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT * FROM email_auto_reply_rules 
+            WHERE is_active = true 
+            ORDER BY priority DESC
+        `);
+        res.json({ rules: result.rows });
+    } catch (error) {
+        // Table might not exist yet
+        res.json({ rules: [] });
+    }
+});
+
+// Update auto-reply rule
+app.put('/api/emails/auto-reply-rules/:id', async (req, res) => {
+    const { id } = req.params;
+    const { is_active, reply_body, trigger_keywords } = req.body;
+    
+    try {
+        const fields = [];
+        const values = [id];
+        let paramCount = 2;
+        
+        if (is_active !== undefined) {
+            fields.push(`is_active = $${paramCount}`);
+            values.push(is_active);
+            paramCount++;
+        }
+        if (reply_body) {
+            fields.push(`reply_body = $${paramCount}`);
+            values.push(reply_body);
+            paramCount++;
+        }
+        if (trigger_keywords) {
+            fields.push(`trigger_keywords = $${paramCount}`);
+            values.push(trigger_keywords);
+            paramCount++;
+        }
+        
+        if (fields.length === 0) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+        
+        const result = await pool.query(
+            `UPDATE email_auto_reply_rules SET ${fields.join(', ')} WHERE id = $1 RETURNING *`,
+            values
+        );
+        
+        res.json(result.rows[0]);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ===================
 // START SERVER
 // ===================
 
@@ -2735,3 +3075,4 @@ app.listen(PORT, async () => {
 // Build fix Sat Feb 21 08:14:55 EST 2026
 // Force deploy 1771680875
 // Stripe integration added Feb 28, 2026
+// AgentMail webhook + AI replies added Mar 5, 2026

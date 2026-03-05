@@ -160,6 +160,66 @@ async function searchMessages(query) {
     ) || [];
 }
 
+/**
+ * Parse AgentMail webhook payload
+ */
+function parseWebhookPayload(payload) {
+    return {
+        from: payload.from || payload.sender,
+        to: payload.to || payload.recipient,
+        subject: payload.subject,
+        body: payload.body || payload.text || payload.html,
+        bodyHtml: payload.html,
+        messageId: payload.message_id || payload.messageId,
+        inReplyTo: payload.in_reply_to || payload.inReplyTo,
+        threadId: payload.thread_id || payload.threadId,
+        timestamp: payload.timestamp || new Date().toISOString(),
+        raw: payload
+    };
+}
+
+/**
+ * Detect intent from email content
+ */
+function detectIntent(subject, body) {
+    const text = `${subject} ${body}`.toLowerCase();
+    
+    // Interest signals
+    const interestKeywords = ['interested', 'sounds good', 'tell me more', 'yes', 'sure', "let's talk", 'can you call', 'call me', 'sign me up'];
+    const pricingKeywords = ['price', 'cost', 'how much', 'pricing', 'fee', 'rate', 'charge', 'expensive', 'cheap'];
+    const demoKeywords = ['demo', 'see it', 'show me', 'how does it work', 'try it', 'hear it', 'listen'];
+    const notInterestedKeywords = ['not interested', 'no thanks', 'not for me', "don't need", 'not right now', 'remove', 'unsubscribe'];
+    const questionKeywords = ['?', 'how', 'what', 'when', 'why', 'can you'];
+    
+    if (interestKeywords.some(kw => text.includes(kw))) return 'interested';
+    if (demoKeywords.some(kw => text.includes(kw))) return 'demo_request';
+    if (pricingKeywords.some(kw => text.includes(kw))) return 'pricing_request';
+    if (notInterestedKeywords.some(kw => text.includes(kw))) return 'not_interested';
+    if (questionKeywords.some(kw => text.includes(kw))) return 'question';
+    
+    return 'general_reply';
+}
+
+/**
+ * Extract sender name from email
+ */
+function extractSenderName(fromHeader) {
+    const match = fromHeader.match(/^(.+?)\s*<.+?>$/) || fromHeader.match(/^(.+?)@/);
+    if (match) {
+        return match[1].trim().replace(/['"]/g, '');
+    }
+    return fromHeader.split('@')[0];
+}
+
+/**
+ * Extract email address from from header
+ */
+function extractEmailAddress(fromHeader) {
+    const match = fromHeader.match(/<(.+?)>/);
+    if (match) return match[1];
+    return fromHeader.trim();
+}
+
 module.exports = {
     listInboxes,
     getMessages,
@@ -170,5 +230,10 @@ module.exports = {
     markAsRead,
     processIncomingEmail,
     getUnreadCount,
-    searchMessages
+    searchMessages,
+    parseWebhookPayload,
+    detectIntent,
+    extractSenderName,
+    extractEmailAddress,
+    INBOX_ID
 };

@@ -761,6 +761,342 @@ app.post('/webhooks/vapi', async (req, res) => {
 });
 
 // ===================
+// AGENTMAIL WEBHOOK (Incoming Emails)
+// ===================
+
+const agentmailService = require('./services/agentmail');
+const aiReplyService = require('./services/ai-reply');
+
+app.post('/webhooks/agentmail', async (req, res) => {
+    console.log('📨 AgentMail Webhook received');
+    
+    try {
+        const payload = agentmailService.parseWebhookPayload(req.body);
+        const { from, to, subject, body, messageId, inReplyTo, threadId } = payload;
+        
+        console.log(`📧 Email from: ${from}`);
+        console.log(`   Subject: ${subject}`);
+        
+        // Extract email address
+        const fromEmail = agentmailService.extractEmailAddress(from);
+        const senderName = agentmailService.extractSenderName(from);
+        
+        // Detect intent
+        const intent = agentmailService.detectIntent(subject, body);
+        console.log(`   Intent: ${intent}`);
+        
+        // Find matching lead in database
+        const leadResult = await pool.query(
+            'SELECT * FROM leads WHERE email = $1 OR email = $2 LIMIT 1',
+            [fromEmail, fromEmail.toLowerCase()]
+        );
+        const lead = leadResult.rows[0] || null;
+        
+        // Store incoming email
+        const emailResult = await pool.query(`
+            INSERT INTO emails (direction, from_email, to_email, subject, body, message_id, in_reply_to, thread_id, status, raw_data)
+            VALUES ('inbound', $1, $2, $3, $4, $5, $6, $7, 'received', $8)
+            RETURNING *
+        `, [
+            fromEmail,
+            to,
+            subject,
+            body,
+            messageId,
+            inReplyTo,
+            threadId,
+            JSON.stringify(req.body)
+        ]);
+        
+        const savedEmail = emailResult.rows[0];
+        
+        // Generate AI suggested reply
+        const aiResult = await aiReplyService.generateSuggestedReply(
+            { from, subject, body, intent },
+            lead
+        );
+        
+        // Store AI suggestion
+        await pool.query(`
+            UPDATE emails 
+            SET ai_suggested_reply = $1, ai_reply_generated_at = NOW()
+            WHERE id = $2
+        `, [aiResult.suggestedReply, savedEmail.id]);
+        
+        console.log(`   AI Confidence: ${aiResult.confidence}`);
+        
+        // Check if we should auto-reply
+        const shouldAutoReply = aiReplyService.shouldAutoReply(intent, aiResult.confidence);
+        
+        if (shouldAutoReply && aiResult.suggestedReply) {
+            console.log(`   🤖 Sending auto-reply...`);
+            
+            const emailService = require('./services/email');
+            const replyResult = await emailService.sendEmail({
+                to: fromEmail,
+                subject: `Re: ${subject}`,
+                html: aiResult.suggestedReply.replace(/\n/g, '<br>')
+            });
+            
+            if (replyResult.success) {
+                // Log the auto-reply
+                await pool.query(`
+                    INSERT INTO emails (direction, from_email, to_email, subject, body, in_reply_to, thread_id, status, auto_reply_sent, auto_reply_rule)
+                    VALUES ('outbound', $1, $2, $3, $4, $5, $6, 'sent', TRUE, $7)
+                `, [
+                    process.env.FROM_EMAIL || 'maurice.pinnock@apexvoicesolutions.com',
+                    fromEmail,
+                    `Re: ${subject}`,
+                    aiResult.suggestedReply,
+                    messageId,
+                    threadId,
+                    intent
+                ]);
+                
+                // Mark original email as replied
+                await pool.query(
+                    'UPDATE emails SET status = $1 WHERE id = $2',
+                    ['replied', savedEmail.id]
+                );
+                
+                // Update lead status if exists
+                if (lead) {
+                    const newStatus = intent === 'interested' ? 'Hot Lead' : 
+                                     intent === 'demo_request' ? 'Demo Requested' :
+                                     intent === 'pricing_request' ? 'Engaged' : lead.status;
+                    
+                    await pool.query(
+                        'UPDATE leads SET status = $1, notes = COALESCE(notes, $2) WHERE id = $3',
+                        [newStatus, `Auto-replied to ${intent} email`, lead.id]
+                    );
+                }
+                
+                console.log(`   ✅ Auto-reply sent to ${fromEmail}`);
+            }
+        }
+        
+        res.json({ 
+            received: true, 
+            emailId: savedEmail.id,
+            intent,
+            aiSuggested: !!aiResult.suggestedReply,
+            autoReplied: shouldAutoReply
+        });
+        
+    } catch (err) {
+        console.error('AgentMail webhook error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ===================
+// EMAILS API ROUTES
+// ===================
+
+// Get all emails (with optional filters)
+app.get('/api/emails', async (req, res) => {
+    try {
+        const { direction, status, limit = 50 } = req.query;
+        
+        let query = 'SELECT * FROM emails';
+        const conditions = [];
+        const params = [];
+        let paramCount = 1;
+        
+        if (direction) {
+            conditions.push(`direction = $${paramCount++}`);
+            params.push(direction);
+        }
+        if (status) {
+            conditions.push(`status = $${paramCount++}`);
+            params.push(status);
+        }
+        
+        if (conditions.length > 0) {
+            query += ' WHERE ' + conditions.join(' AND ');
+        }
+        
+        query += ` ORDER BY created_at DESC LIMIT $${paramCount}`;
+        params.push(parseInt(limit));
+        
+        const result = await pool.query(query, params);
+        res.json({ emails: result.rows });
+    } catch (error) {
+        console.error('Error fetching emails:', error);
+        res.status(500).json({ error: 'Failed to fetch emails' });
+    }
+});
+
+// Get email thread
+app.get('/api/emails/thread/:threadId', async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM emails WHERE thread_id = $1 ORDER BY created_at ASC',
+            [req.params.threadId]
+        );
+        res.json({ thread: result.rows });
+    } catch (error) {
+        console.error('Error fetching thread:', error);
+        res.status(500).json({ error: 'Failed to fetch thread' });
+    }
+});
+
+// Get emails for a specific lead
+app.get('/api/leads/:id/emails', async (req, res) => {
+    try {
+        // First get the lead's email
+        const leadResult = await pool.query('SELECT email FROM leads WHERE id = $1', [req.params.id]);
+        
+        if (leadResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Lead not found' });
+        }
+        
+        const leadEmail = leadResult.rows[0].email;
+        
+        if (!leadEmail) {
+            return res.json({ emails: [] });
+        }
+        
+        const result = await pool.query(
+            `SELECT * FROM emails 
+             WHERE from_email = $1 OR to_email = $1 
+             ORDER BY created_at DESC`,
+            [leadEmail]
+        );
+        
+        res.json({ emails: result.rows });
+    } catch (error) {
+        console.error('Error fetching lead emails:', error);
+        res.status(500).json({ error: 'Failed to fetch emails' });
+    }
+});
+
+// Send manual reply (approve AI suggestion or custom)
+app.post('/api/emails/:id/reply', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { message, useAiSuggestion } = req.body;
+        
+        // Get original email
+        const emailResult = await pool.query('SELECT * FROM emails WHERE id = $1', [id]);
+        
+        if (emailResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Email not found' });
+        }
+        
+        const originalEmail = emailResult.rows[0];
+        
+        // Determine reply content
+        let replyBody = message;
+        if (useAiSuggestion && originalEmail.ai_suggested_reply) {
+            replyBody = originalEmail.ai_suggested_reply;
+        }
+        
+        if (!replyBody) {
+            return res.status(400).json({ error: 'No message provided' });
+        }
+        
+        // Send reply via Resend
+        const emailService = require('./services/email');
+        const result = await emailService.sendEmail({
+            to: originalEmail.from_email,
+            subject: `Re: ${originalEmail.subject}`,
+            html: replyBody.replace(/\n/g, '<br>')
+        });
+        
+        if (result.success) {
+            // Log the reply
+            await pool.query(`
+                INSERT INTO emails (direction, from_email, to_email, subject, body, in_reply_to, thread_id, status)
+                VALUES ('outbound', $1, $2, $3, $4, $5, $6, 'sent')
+            `, [
+                process.env.FROM_EMAIL || 'maurice.pinnock@apexvoicesolutions.com',
+                originalEmail.from_email,
+                `Re: ${originalEmail.subject}`,
+                replyBody,
+                originalEmail.message_id,
+                originalEmail.thread_id
+            ]);
+            
+            // Mark original as replied
+            await pool.query('UPDATE emails SET status = $1 WHERE id = $2', ['replied', id]);
+            
+            res.json({ success: true, messageId: result.id });
+        } else {
+            res.status(500).json({ error: result.error || 'Failed to send reply' });
+        }
+    } catch (error) {
+        console.error('Error sending reply:', error);
+        res.status(500).json({ error: 'Failed to send reply' });
+    }
+});
+
+// Regenerate AI suggestion
+app.post('/api/emails/:id/regenerate-suggestion', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const emailResult = await pool.query('SELECT * FROM emails WHERE id = $1', [id]);
+        
+        if (emailResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Email not found' });
+        }
+        
+        const email = emailResult.rows[0];
+        const intent = agentmailService.detectIntent(email.subject, email.body);
+        
+        const aiResult = await aiReplyService.generateSuggestedReply(
+            { from: email.from_email, subject: email.subject, body: email.body, intent }
+        );
+        
+        await pool.query(`
+            UPDATE emails 
+            SET ai_suggested_reply = $1, ai_reply_generated_at = NOW()
+            WHERE id = $2
+        `, [aiResult.suggestedReply, id]);
+        
+        res.json({ 
+            suggestedReply: aiResult.suggestedReply,
+            confidence: aiResult.confidence 
+        });
+    } catch (error) {
+        console.error('Error regenerating suggestion:', error);
+        res.status(500).json({ error: 'Failed to regenerate suggestion' });
+    }
+});
+
+// Get auto-reply rules
+app.get('/api/email-rules', async (req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM email_auto_reply_rules ORDER BY priority DESC'
+        );
+        res.json({ rules: result.rows });
+    } catch (error) {
+        console.error('Error fetching rules:', error);
+        res.status(500).json({ error: 'Failed to fetch rules' });
+    }
+});
+
+// Update auto-reply rule
+app.put('/api/email-rules/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { is_active } = req.body;
+        
+        const result = await pool.query(
+            'UPDATE email_auto_reply_rules SET is_active = $1 WHERE id = $2 RETURNING *',
+            [is_active, id]
+        );
+        
+        res.json({ rule: result.rows[0] });
+    } catch (error) {
+        console.error('Error updating rule:', error);
+        res.status(500).json({ error: 'Failed to update rule' });
+    }
+});
+
+// ===================
 // SEED DEFAULT USER
 // ===================
 
