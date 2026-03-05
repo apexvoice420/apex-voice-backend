@@ -149,6 +149,10 @@ app.use('/api/leads', leadsRoutes);
 const linkedinRoutes = require('./src/routes/linkedin');
 app.use('/api/linkedin', linkedinRoutes);
 
+// Webhooks routes (VAPI, AgentMail)
+const webhooksRoutes = require('./src/routes/webhooks');
+app.use('/webhooks', webhooksRoutes);
+
 // Legacy routes for backwards compatibility
 app.get('/leads', async (req, res) => {
     try {
