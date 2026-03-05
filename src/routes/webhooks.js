@@ -281,4 +281,48 @@ router.get('/agentmail/otp/latest', async (req, res) => {
     }
 });
 
+// POST Run migration to create email_threads table
+router.post('/agentmail/migrate', async (req, res) => {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS email_threads (
+                id SERIAL PRIMARY KEY,
+                lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+                thread_id VARCHAR(255),
+                message_id VARCHAR(255) UNIQUE,
+                direction VARCHAR(20) NOT NULL,
+                subject VARCHAR(500),
+                preview TEXT,
+                body TEXT,
+                from_email VARCHAR(255),
+                to_email VARCHAR(255),
+                labels TEXT[],
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_email_threads_lead_id ON email_threads(lead_id);
+            CREATE INDEX IF NOT EXISTS idx_email_threads_thread_id ON email_threads(thread_id);
+            CREATE INDEX IF NOT EXISTS idx_email_threads_direction ON email_threads(direction);
+            CREATE INDEX IF NOT EXISTS idx_email_threads_created_at ON email_threads(created_at);
+        `);
+        
+        res.json({ success: true, message: 'email_threads table created' });
+    } catch (err) {
+        console.error('Migration error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET email threads from database
+router.get('/agentmail/threads', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM email_threads ORDER BY created_at DESC LIMIT 50');
+        res.json({ threads: result.rows });
+    } catch (err) {
+        console.error('Error fetching threads:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;
